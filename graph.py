@@ -1,12 +1,9 @@
 import json
 import re
-import os
-import pandas as pd
 from langgraph.graph import StateGraph
 from typing import TypedDict
 from langchain_core.messages import HumanMessage
 from utils import detect_language, translate_text
-from visualizer import Visualizer, FileDataSource, MockDataSource
 
 class State(TypedDict):
     question: str
@@ -14,14 +11,10 @@ class State(TypedDict):
     intent: str
     data: dict
     answer: str
-    graph_url: str
     
 def load_data():
-    path = "data/public_data.json"
-    if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
+    with open("data/public_data.json", "r", encoding="utf-8") as f:
+        return json.load(f)
     
 DATA = load_data()
 
@@ -34,7 +27,7 @@ INTENT_MAP = {
     "female_members": ["female members"],
     "male_members": ["male members"],
     "directors_total": ["directors_total", "number of directors", "directors"],
-    "visualize": ["visualize", "graph", "plot", "chart", "show me trends"]
+    
 }
 
 def detect_lan_and_translate(state: State, llm):
@@ -65,7 +58,6 @@ def detect_intent(state: State, llm):
         "- male_members\n"
         "- members_by_state\n"
         "- directors_total\n"
-        "- visualize\n"
         "- unknown\n\n"
         f"Question: {state['question']}"
     )
@@ -101,63 +93,20 @@ def select_data(state: State):
     return {"data": None}
 
 def generate_answer(state: State, llm):
-    response = ""
     if state["data"] is None:
-        response = "I can only provide general public information available in this system."
-    else:
-        prompt = (
-            "Using the data below, answer the question clearly.\n"
-            "Do NOT add new information, assumptions or extra facts.\n\n"
-            f"Data:\n{state['data']}\n\n"
-            f"Question:\n{state['question']}"
-        )
-        response = llm.invoke([HumanMessage(content=prompt)]).content.strip()
-    
-    if state.get("graph_url"):
-        if response and response != "I can only provide general public information available in this system.":
-            response += "\n\n"
-        else:
-            response = "" # Clear the "I can only provide..." message if we have a real chart? 
-            # Actually, user said: The agent should be able to say, "I've analyzed the current data state and generated this visualization."
-        
-        response += f"I've analyzed the current data state and generated this visualization: {state['graph_url']}"
-        
+        return {
+            "answer": "I can only provide general public information available in this system."
+        }
+
+    prompt = (
+        "Using the data below, answer the question clearly.\n"
+        "Do NOT add new information, assumptions or extra facts.\n\n"
+        f"Data:\n{state['data']}\n\n"
+        f"Question:\n{state['question']}"
+    )
+
+    response = llm.invoke([HumanMessage(content=prompt)]).content.strip()
     return {"answer": response}
-
-from visualizer import Visualizer, FileDataSource, MockDataSource
-
-def visualize_node(state: State):
-    # Determine strategy
-    if os.path.exists("data/public_data.json"):
-        # We need to transform the JSON structure into a flat DF for visualization if possible
-        with open("data/public_data.json", "r") as f:
-            raw_data = json.load(f)
-        
-        # If it's the members_by_state, it's easy to visualize
-        if state["intent"] == "members_by_state":
-            df = pd.DataFrame(list(raw_data["members_by_state"].items()), columns=["State", "Members"])
-            # Temporary file strategy for this specific DF
-            temp_path = "data/temp_viz.csv"
-            df.to_csv(temp_path, index=False)
-            strategy = FileDataSource(temp_path)
-        else:
-            strategy = MockDataSource()
-    else:
-        strategy = MockDataSource()
-        
-    viz = Visualizer(strategy)
-    output_filename = f"static/graphs/viz_{state['intent']}.png"
-    graph_path = viz.analyze_and_plot(output_path=output_filename)
-    
-    # In a web app, we want the URL relative to static
-    graph_url = f"/static/graphs/{os.path.basename(graph_path)}"
-    
-    return {"graph_url": graph_url}
-
-def route_to_answer(state: State):
-    if state["intent"] == "visualize" or state["intent"] == "members_by_state":
-        return "visualize"
-    return "answer"
 
 
 def build_graph(llm):
@@ -166,21 +115,11 @@ def build_graph(llm):
     graph.add_node("translate", lambda s: detect_lan_and_translate(s, llm))
     graph.add_node("intent", lambda s: detect_intent(s, llm))
     graph.add_node("data", select_data)
-    graph.add_node("visualize", visualize_node)
     graph.add_node("answer", lambda s: generate_answer(s, llm))
 
     graph.set_entry_point("translate")
     graph.add_edge("translate", "intent")
     graph.add_edge("intent", "data")
-    
-    graph.add_conditional_edges(
-        "data",
-        route_to_answer,
-        {
-            "visualize": "visualize",
-            "answer": "answer"
-        }
-    )
-    graph.add_edge("visualize", "answer")
+    graph.add_edge("data", "answer")
 
     return graph.compile()
