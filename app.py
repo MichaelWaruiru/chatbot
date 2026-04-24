@@ -17,6 +17,8 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from logging_config import setup_logging
 from llm_cache import get_cached_answer, store_cached_answer, serialize_safe
 from dotenv import load_dotenv
+from flask_Cors import CORS
+
 
 
 load_dotenv()
@@ -34,7 +36,7 @@ except FileNotFoundError:
     logger.warning("chitchat.json not found. Skipping chitchat interception.")
 
 app = Flask(__name__)
-
+CORS(app, resources={r"/chat": {"origins": "*"}, r"/translate": {"origins": "*"}})
 # Redis configuration
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY")
 app.config["SESSION_TYPE"] = os.getenv("SESSION_TYPE")
