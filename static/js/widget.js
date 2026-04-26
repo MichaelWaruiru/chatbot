@@ -1,7 +1,7 @@
 (function() {
     // 1. Hardcode your backend URL. 
     // You can no longer use window.location.origin because it will return the host's website URL.
-    const API_BASE = "https://your-deployed-server-url.com"; 
+    const API_BASE = "http://184.174.36.49:5000/"; 
 
     // 2. Inject Scoped CSS
     const styles = `
