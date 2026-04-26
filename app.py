@@ -17,7 +17,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from logging_config import setup_logging
 from llm_cache import get_cached_answer, store_cached_answer, serialize_safe
 from dotenv import load_dotenv
-from flask_Cors import CORS
+from flask_cors import CORS
 
 
 
