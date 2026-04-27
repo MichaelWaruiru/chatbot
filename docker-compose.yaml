@@ -3,7 +3,7 @@ services:
     build: .
     container_name: chatbot
     command: >
-      gunicorn app:app  --bind 0.0.0.0:5000  --workers 2 --threads 2  --timeout 120  --graceful-timeout 120  --keep-alive 5  --max-requests 100  --max-requests-jitter 20 --preload
+      gunicorn app:app  --bind 0.0.0.0:5000  --workers 2 --threads 20  --timeout 120  --graceful-timeout 120  --keep-alive 5  --max-requests 100  --max-requests-jitter 20 
     ports:
       - "5000:5000"
     env_file:

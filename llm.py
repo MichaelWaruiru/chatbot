@@ -8,27 +8,47 @@ load_dotenv()
 
 def gemini_pro_sql():
     """
-    BEST FOR SQL: Uses Gemini 3.1 Pro.
-    High reasoning capabilities for complex JOINs and schema mapping.
+    BEST FOR SQL: Uses Gemini 2.5 Pro as primary.
+    Instantly falls back to Flash if Pro is rate-limited or busy.
     """
-    return ChatGoogleGenerativeAI(
+    primary = ChatGoogleGenerativeAI(
         model="gemini-2.5-pro",
-        temperature=0,  # Critical for SQL to stay consistent
-        max_output_tokens=1024, # Increased for complex SQL queries
-        google_api_key=os.getenv("GOOGLE_API_KEY")
-    )
-
-def gemini_flash_fast():
-    """
-    BEST FOR CHAT/TRANSLATION: Uses Gemini 3 Flash.
-    Fast, cost-efficient, and perfect for simple intent/translation.
-    """
-    return ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
-        temperature=0, # Slight creativity for natural chat
+        temperature=0,
         max_output_tokens=1024,
         google_api_key=os.getenv("GOOGLE_API_KEY")
     )
+    
+    # Define Flash as the backup model
+    fallback = ChatGoogleGenerativeAI(
+        model="gemini-2.5-flash",
+        temperature=0,
+        max_output_tokens=1024,
+        google_api_key=os.getenv("GOOGLE_API_KEY")
+    )
+    
+    # This ensures that if the 'primary' fails, LangChain automatically tries the 'fallback'
+    return primary.with_fallbacks([fallback])
+
+def gemini_flash_fast():
+    """
+    BEST FOR CHAT/TRANSLATION: Uses Gemini 2.5 Flash Lite as primary for speed.
+    Falls back to standard Flash if Lite is unavailable.
+    """
+    primary = ChatGoogleGenerativeAI(
+        model="gemini-2.5-flash-lite",
+        temperature=0,
+        max_output_tokens=1024,
+        google_api_key=os.getenv("GOOGLE_API_KEY")
+    )
+    
+    fallback = ChatGoogleGenerativeAI(
+        model="gemini-2.5-flash",
+        temperature=0,
+        max_output_tokens=1024,
+        google_api_key=os.getenv("GOOGLE_API_KEY")
+    )
+    
+    return primary.with_fallbacks([fallback])
 
 # --- Legacy Support (Uncomment if needed) ---
 # def openai_llm():
