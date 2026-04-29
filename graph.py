@@ -19,7 +19,8 @@ import matplotlib
 matplotlib.use("agg") # This for headless plot graphs(Use before pyplot import)
 import matplotlib.pyplot as plt
 from vector_db import get_vector_db
-from cache import vector_cache, sql_cache
+from cache import vector_cache, redis_client 
+import json
 from logging_config import setup_logging
 from collections import defaultdict
 from prompts.prompt import (
@@ -100,8 +101,14 @@ ALLOWED_COLUMNS = {
 }
 
 # Helper functions
+cached_schema_string = None
+
 def get_schema(_):
-    return db.get_table_info(table_names=ALLOWED_TABLES)
+    global cached_schema_string
+    if cached_schema_string is None:
+        logger.info("[SCHEMA CACHE MISS] Fetching fresh schema from database...")
+        cached_schema_string = db.get_table_info(table_names=ALLOWED_TABLES)
+    return cached_schema_string
 
 def extract_tables_and_aliases(sql_text: str):
     tables = set()
@@ -186,15 +193,20 @@ def semantic_search(question: str, k: int = 5):
     
 def run_query(query: str):
     sql = sanitize_sql(query)
-    if sql in sql_cache:
-        logger.info("[SQL CACHE HIT]")
-        return sql_cache[sql]
+    
+    # Check Redis cache first
+    cache_key = f"sql_cache:{hashlib.md5(sql.encode()).hexdigest()}"
+    cached_result = redis_client.get(cache_key)
+    
+    if cached_result:
+        logger.info("[SQL REDIS CACHE HIT]")
+        return cached_result # Redis stores strings, which is perfect for the LLM context
 
     logger.info(f"[SQL EXECUTE] {sql}")
-
     try:
         result = db.run(sql)
-        sql_cache[sql] = result
+        # Store in Redis for 10 minutes (600 seconds)
+        redis_client.setex(cache_key, 600, str(result))
         logger.info("[SQL SUCCESS]")
         return result
     except Exception as e:
