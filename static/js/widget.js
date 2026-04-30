@@ -1,8 +1,7 @@
-
 (function() {
     // 1. Hardcode your backend URL.
-    const API_BASE = "ttp://184.174.36.49:5000";
-    // 2. Inject Modern Scoped CSS
+    const API_BASE = "https://ai.co-opmagic.org";   // FIXED: http:// not ttp://
+    // 2. Inject Modern Scoped CSS (unchanged, kept as is)
     const styles = `
       #coop-magic-widget { 
           position: fixed; bottom: 20px; right: 20px; z-index: 9999; 
@@ -50,7 +49,7 @@
       }
       .message.user { 
           background: #00a859; color: white; align-self: flex-end; 
-          border-bottom-right-radius: 4px; /* Creates a modern chat bubble 'tail' */
+          border-bottom-right-radius: 4px;
       }
       .message.bot { 
           background: #ffffff; color: #333; align-self: flex-start; 
@@ -77,7 +76,6 @@
           border-radius: 12px; color: #555; transition: all 0.2s ease;
       }
       .translate-btn:hover { background: #e4e4e4; color: #333; }
-      /* Typing Indicator Animation */
       .typing-indicator {
           display: flex;
           align-items: center;
@@ -95,7 +93,7 @@
           width: 8px;
           height: 8px;
           background-color: #00a859;
-          border-radius: 50%; /* Strictly circular */
+          border-radius: 50%;
           opacity: 0.4;
           animation: rainDropPulse 1.2s infinite ease-in-out;
       }
@@ -108,9 +106,8 @@
           50% { transform: translateY(-4px) scale(1.1); opacity: 1; }
       }
       
-      /* Button Loading State */
       #coop-magic-form button:disabled {
-          background: #80d4ac; /* Faded green */
+          background: #80d4ac;
           cursor: not-allowed;
       }
     `;
@@ -184,7 +181,85 @@
         }
     }
 
+    // Helper to create download toolbar (used both when graph first arrives)
+    function addDownloadToolbar(parentDiv, graphBase64, graphSvg, vizData) {
+        const toolBar = document.createElement("div");
+        toolBar.style.marginTop = "10px";
+        toolBar.style.display = "flex";
+        toolBar.style.gap = "8px";
+        toolBar.style.flexWrap = "wrap";
+        const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+
+        const btnPng = document.createElement("button");
+        btnPng.textContent = "📥 PNG";
+        btnPng.className = "translate-btn";
+        btnPng.onclick = () => {
+            const a = document.createElement("a");
+            a.href = `data:image/png;base64,${graphBase64}`;
+            a.download = `chart_${timestamp}.png`;
+            a.click();
+        };
+        toolBar.appendChild(btnPng);
+
+        if (graphSvg) {
+            const btnSvg = document.createElement("button");
+            btnSvg.textContent = "📥 SVG";
+            btnSvg.className = "translate-btn";
+            const svgBlob = new Blob([graphSvg], {type: "image/svg+xml;charset=utf-8"});
+            btnSvg.onclick = () => {
+                const url = URL.createObjectURL(svgBlob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `chart_${timestamp}.svg`;
+                a.click();
+                URL.revokeObjectURL(url);
+            };
+            toolBar.appendChild(btnSvg);
+        }
+
+        if (vizData && vizData.length > 0) {
+            const csvHeader = Object.keys(vizData[0]).join(",");
+            const csvRows = vizData.map(row =>
+                Object.values(row).map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")
+            );
+            const csvContent = [csvHeader, ...csvRows].join("\n");
+
+            const btnCsv = document.createElement("button");
+            btnCsv.textContent = "📥 CSV";
+            btnCsv.className = "translate-btn";
+            btnCsv.onclick = () => {
+                const blob = new Blob([csvContent], {type: "text/csv;charset=utf-8;"});
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `data_${timestamp}.csv`;
+                a.click();
+                URL.revokeObjectURL(url);
+            };
+            toolBar.appendChild(btnCsv);
+
+            const btnJson = document.createElement("button");
+            btnJson.textContent = "📥 JSON";
+            btnJson.className = "translate-btn";
+            btnJson.onclick = () => {
+                const blob = new Blob([JSON.stringify(vizData, null, 2)], {type: "application/json"});
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `data_${timestamp}.json`;
+                a.click();
+                URL.revokeObjectURL(url);
+            };
+            toolBar.appendChild(btnJson);
+        }
+
+        parentDiv.appendChild(toolBar);
+    }
+
+    // ** NON‑STREAMED bot message (used for cached/history/greetings) **
     function addBotMessage(data, saveToHistory = true) {
+        if (!data || (!data.answer && !data.graphBase64 && !data.graphSvg)) return;
+
         if (data.answer) {
             const wrapper = document.createElement("div");
             wrapper.className = "message bot";
@@ -229,34 +304,33 @@
         }
 
         if (data.graphBase64) {
+            const wrapper = document.createElement("div");
+            wrapper.className = "message bot";
             const img = document.createElement("img");
             img.src = `data:image/png;base64,${data.graphBase64}`;
             img.style.maxWidth = "100%";
             img.style.borderRadius = "8px";
             img.style.marginTop = "10px";
             img.style.border = "1px solid #ccc";
-            
-            const wrapper = document.createElement("div");
-            wrapper.className = "message bot";
             wrapper.appendChild(img);
+            addDownloadToolbar(wrapper, data.graphBase64, data.graphSvg, data.vizData);
             messages.appendChild(wrapper);
         }
 
-        if (data.graphSvg) {
+        if (data.graphSvg && !data.graphBase64) {
+            const wrapper = document.createElement("div");
+            wrapper.className = "message bot";
             const svgContainer = document.createElement("div");
             svgContainer.innerHTML = data.graphSvg;
             svgContainer.style.maxWidth = "100%";
             svgContainer.style.marginTop = "10px";
-            
-            const svgElement = svgContainer.querySelector("svg");
-            if (svgElement) {
-                svgElement.style.width = "100%";
-                svgElement.style.height = "auto";
+            const svgEl = svgContainer.querySelector("svg");
+            if (svgEl) {
+                svgEl.style.width = "100%";
+                svgEl.style.height = "auto";
             }
-            
-            const wrapper = document.createElement("div");
-            wrapper.className = "message bot";
             wrapper.appendChild(svgContainer);
+            addDownloadToolbar(wrapper, null, data.graphSvg, data.vizData);
             messages.appendChild(wrapper);
         }
 
@@ -268,6 +342,7 @@
         }
     }
 
+    // 6. Load chat history on startup
     if (chatHistory.length > 0) {
         chatHistory.forEach(msg => {
             if (msg.role === "user") {
@@ -280,23 +355,21 @@
         addBotMessage({ answer: "👋 Hello! I'm Co-op Magic AI Assistant. Ask me anything about cooperatives in South Sudan." }, false);
     }
 
+    // 7. Form submit: supports both cached (non‑streamed) and streamed responses
     form.addEventListener("submit", async (e) => {
         e.preventDefault();
         const message = input.value.trim();
         if (!message) return;
 
-        // 1. Add user message
-        addMessage(message, "user"); 
+        addMessage(message, "user");
         input.value = "";
         
-        // 2. Disable input and button, change button text
         input.disabled = true;
         const submitBtn = form.querySelector("button[type='submit']");
         const originalBtnText = submitBtn.textContent;
         submitBtn.disabled = true;
         submitBtn.textContent = "Wait...";
 
-        // 3. Inject the animated typing indicator
         const typingDiv = document.createElement("div");
         typingDiv.className = "typing-indicator";
         typingDiv.innerHTML = '<div class="dot"></div><div class="dot"></div><div class="dot"></div>';
@@ -304,23 +377,162 @@
         messages.scrollTop = messages.scrollHeight;
 
         try {
-            // 4. Send request to the backend
             const res = await fetch(`${API_BASE}/chat`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ message })
             });
-            const data = await res.json();
-            
-            // 5. Remove the typing animation BEFORE showing the answer
-            typingDiv.remove();
-            
-            addBotMessage(data); 
+
+            const contentType = res.headers.get("content-type") || "";
+
+            // === CACHED / CHITCHAT RESPONSE (non‑streamed) ===
+            if (contentType.includes("application/json")) {
+                const data = await res.json();
+                typingDiv.remove();
+                addBotMessage(data);
+            }
+            // === STREAMING RESPONSE (text/event-stream) ===
+            else if (contentType.includes("text/event-stream")) {
+                const reader = res.body.getReader();
+                const decoder = new TextDecoder();
+                let botWrapper = null;
+                let botTextSpan = null;
+                let graphRendered = false;
+                let buffer = "";
+
+                // Helper to add translate button once at end
+                function addTranslateButtonToStreamedBot() {
+                    if (!botTextSpan) return;
+                    const fullText = botTextSpan.textContent;
+                    const isArabic = /[\u0600-\u06FF]/.test(fullText);
+                    let currentLang = isArabic ? "ar" : "en";
+                    const btn = document.createElement("button");
+                    btn.className = "translate-btn";
+                    btn.textContent = isArabic ? "Translate to English" : "Translate to Arabic";
+                    btn.onclick = async () => {
+                        btn.disabled = true;
+                        btn.textContent = "Translating...";
+                        try {
+                            const resp = await fetch(`${API_BASE}/translate`, {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({
+                                    text: botTextSpan.textContent,
+                                    target_lang: currentLang === "en" ? "Arabic" : "English"
+                                })
+                            });
+                            const respData = await resp.json();
+                            botTextSpan.textContent = respData.translation;
+                            currentLang = currentLang === "en" ? "ar" : "en";
+                            btn.textContent = currentLang === "en" ? "Translate to Arabic" : "Translate to English";
+                        } catch (err) {
+                            console.error(err);
+                            btn.textContent = "Error";
+                        } finally {
+                            btn.disabled = false;
+                        }
+                    };
+                    botWrapper.appendChild(btn);
+                }
+
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    buffer += decoder.decode(value, { stream: true });
+                    const events = buffer.split("\n\n");
+                    buffer = events.pop();
+
+                    for (const event of events) {
+                        if (!event.trim()) continue;
+                        const dataLine = event.split("\n").find(line => line.startsWith("data:"));
+                        if (!dataLine) continue;
+                        let chunk;
+                        try {
+                            chunk = JSON.parse(dataLine.replace("data: ", ""));
+                        } catch (e) {
+                            console.warn("Stream parse error:", e);
+                            continue;
+                        }
+
+                        // First chunk: remove typing indicator, create bot bubble
+                        if (!botWrapper) {
+                            typingDiv.remove();
+                            botWrapper = document.createElement("div");
+                            botWrapper.className = "message bot";
+
+                            const contentDiv = document.createElement("div");
+                            contentDiv.className = "bot-text";
+                            botTextSpan = document.createElement("span");
+                            contentDiv.appendChild(botTextSpan);
+                            botWrapper.appendChild(contentDiv);
+                            messages.appendChild(botWrapper);
+                        }
+
+                        // Append text
+                        if (chunk.answer && botTextSpan) {
+                            botTextSpan.textContent += chunk.answer;
+                        }
+
+                        // Graph – render once
+                        if (!graphRendered && (chunk.graphBase64 || chunk.graphSvg || chunk.vizData)) {
+                            graphRendered = true;
+                            const contentDiv = botWrapper.querySelector(".bot-text");
+                            if (chunk.graphBase64) {
+                                const img = document.createElement("img");
+                                img.src = `data:image/png;base64,${chunk.graphBase64}`;
+                                img.className = "chat-graph";
+                                img.style.maxWidth = "100%";
+                                img.style.borderRadius = "8px";
+                                img.style.marginTop = "10px";
+                                img.alt = "Data Visualization";
+                                contentDiv.appendChild(img);
+                                addDownloadToolbar(contentDiv, chunk.graphBase64, chunk.graphSvg, chunk.vizData);
+                            } else if (chunk.graphSvg) {
+                                const svgDiv = document.createElement("div");
+                                svgDiv.innerHTML = chunk.graphSvg;
+                                svgDiv.style.maxWidth = "100%";
+                                svgDiv.style.marginTop = "10px";
+                                const svgEl = svgDiv.querySelector("svg");
+                                if (svgEl) {
+                                    svgEl.style.width = "100%";
+                                    svgEl.style.height = "auto";
+                                }
+                                contentDiv.appendChild(svgDiv);
+                                addDownloadToolbar(contentDiv, null, chunk.graphSvg, chunk.vizData);
+                            }
+                        }
+
+                        messages.scrollTop = messages.scrollHeight;
+                    }
+                }
+
+                // After stream ends, add translate button and save history
+                if (botWrapper) {
+                    addTranslateButtonToStreamedBot();
+                    // Save to history with final state
+                    const finalData = {
+                        answer: botTextSpan.textContent,
+                        graphBase64: graphRendered ? (botWrapper.querySelector("img")?.src.split(",")[1] || null) : null,
+                        // Note: we don't easily preserve SVG/viz data for history, but it's okay for now
+                    };
+                    chatHistory.push({ role: "bot", data: finalData });
+                    saveHistory();
+                } else {
+                    // If no bot content, show fallback
+                    addBotMessage({ answer: "Received an empty response." });
+                }
+            }
+            // === UNKNOWN CONTENT TYPE ===
+            else {
+                typingDiv.remove();
+                const text = await res.text();
+                addBotMessage({ answer: text || "Unexpected response format." });
+            }
         } catch (err) {
             typingDiv.remove();
             addBotMessage({ answer: "Sorry, something went wrong connecting to the server." });
+            console.error(err);
         } finally {
-            // 6. Restore input and button states
             input.disabled = false;
             submitBtn.disabled = false;
             submitBtn.textContent = originalBtnText;

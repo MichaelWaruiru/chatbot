@@ -25,7 +25,7 @@ pool = redis.ConnectionPool(
     decode_responses=True,
     socket_connect_timeout=2,
     socket_timeout=2,
-    max_connections=20  # prevents overload
+    max_connections=40  # prevents overload
 )
 
 # Redis client with retry

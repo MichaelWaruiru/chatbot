@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template, session
+from flask import Flask, request, jsonify, render_template, session, Response
 from flask_session import Session
 import uuid
 import redis
@@ -18,8 +18,6 @@ from logging_config import setup_logging
 from llm_cache import get_cached_answer, store_cached_answer, serialize_safe
 from dotenv import load_dotenv
 from flask_cors import CORS
-
-
 
 load_dotenv()
 
@@ -81,9 +79,11 @@ def index():
 @app.route("/chat", methods=["POST"])
 def chat():
     """
-    Main chatbot endpoint.
-    Handles concurrent users through Redis sessions.
+    Main chatbot endpoint with SSE streaming.
+    Cached and chitchat responses are returned immediately (non‑streamed).
+    All other queries are streamed via Server‑Sent Events.
     """
+    # Ensure session exists
     if "session_id" not in session:
         session["session_id"] = str(uuid.uuid4())
         logger.info(f"[NEW SESSION] {session['session_id']}")
@@ -92,101 +92,77 @@ def chat():
     question = payload.get("message", "")
 
     # 2. CHITCHAT INTERCEPTION LOGIC
-    # Normalize the question (lowercase and remove punctuation)
     clean_question = re.sub(r'[^\w\s]', '', question).strip().lower()
-
     if clean_question in CHITCHAT_RESPONSES:
         logger.info("CHITCHAT INTERCEPT HIT")
         response = {
             "answer": CHITCHAT_RESPONSES[clean_question],
-            "graphBase64": None # No graph execution happened
+            "graphBase64": None
         }
         return jsonify(response)
     
     logger.info(f"[USER QUESTION] {question}")
     
-    # Check Redis LLM cache first
+    # 3. Check Redis LLM cache (full answer)
     cached = get_cached_answer(question)
-
     if cached:
         logger.info(f"LLM CACHE HIT: {question}")
         return jsonify(cached)
     
-    # Pre-check: Skip semantic cache for questions likely needing visualizations
+    # 4. Pre‑check for visualization intent (skip FAISS cache for graphs)
     viz_keywords = ["graph", "chart", "show", "visualize", "plot", "display", "diagram"]
     is_viz_intent = any(keyword in question.lower() for keyword in viz_keywords)
     
     if not is_viz_intent:
-        # Semantic FAISS cache (only for text-intent questions)
         semantic_hit = get_similar_que(question)
-    
         if semantic_hit:
             logger.info("[CACHE HIT - FAISS SEMANTIC]")
             return jsonify(semantic_hit)
 
     logger.info(f"LLM CACHE MISS: {question}")
     
-    # Pass thread_id via config, not in the input state
-    config = {"configurable": {"thread_id": session["session_id"]}}
+    # 5. Streaming response for live generation
+    def generate_stream():
+        config = {"configurable": {"thread_id": session["session_id"]}}
+        last_answer = None
 
-    # Safe graph execution
-    try:
-        for attempt in range(3):
-            try:
-                result = graph.invoke(
-                    {"question": question},
-                    config=config
-                )
-                break
-            except ServerError as e:
-                logger.warning(f"[503 ERROR] attempt {attempt+1}")
-                if attempt == 2:
-                    raise
-                time.sleep(2 ** attempt)
+        try:
+            # Stream graph events – each node update is yielded
+            for event in graph.stream({"question": question}, config=config):
+                # → When the answer node finishes, send its partial/full answer
+                if "answer" in event:
+                    ans_data = event["answer"]
+                    last_answer = ans_data.get("answer")
+                    yield f"data: {json.dumps(ans_data)}\n\n"
 
-        logger.info("[GRAPH EXECUTION COMPLETE]")
+                # → When visualisation node finishes, send graph assets
+                if "visualize" in event:
+                    viz_data = event["visualize"]
+                    yield f"data: {json.dumps(viz_data)}\n\n"
 
-        response = {
-            "answer": result.get("answer"),
-            "graphBase64": result.get("graph_base64"),
-            "graphSvg": result.get("graph_svg"),
-            "vizData": result.get("viz_data")
-        }
-        
-        response = serialize_safe(response)
-        
-        # Skip caching visualization
-        is_viz = any([
-            response.get("graphBase64"),
-            response.get("graphSvg"),
-            response.get("vizData")
-        ])
-        
-        # store only valid responses
-        if response.get("answer") and not is_viz:
-            store_cached_answer(question, response)
-            store_que_pair(question, response)
-            logger.info("[CACHE STORE - TEXT ONLY, REDIS + FAISS]")
-        else:
-            logger.info("[SKIP CACHE - VISUALIZATION]")
+        except ServerError as e:
+            logger.warning(f"[503 ERROR during stream] {e}")
+            yield f"data: {json.dumps({'answer': 'The AI service is currently experiencing high demand. Please try again shortly.'})}\n\n"
+        except Exception as e:
+            logger.exception("[UNEXPECTED STREAM ERROR]")
+            yield f"data: {json.dumps({'answer': 'Something went wrong on the server. Please try again later.'})}\n\n"
+        finally:
+            # After streaming, cache the final answer if appropriate
+            if last_answer and not is_viz_intent:
+                response_to_cache = {
+                    "answer": last_answer,
+                    "graphBase64": None,
+                    "graphSvg": None,
+                    "vizData": None
+                }
+                # We can't capture graph data here easily, but text‑only caching is safe
+                store_cached_answer(question, response_to_cache)
+                store_que_pair(question, response_to_cache)
+                logger.info("[CACHE STORE - TEXT ONLY, REDIS + FAISS]")
+            elif last_answer:
+                logger.info("[SKIP CACHE - VISUALIZATION]")
 
-        return jsonify(response)
-    
-    except ServerError:
-        logger.error("[FINAL 503 FAILURE]")
-
-        return jsonify({
-            "answer": "The AI service is currently experiencing high demand. Please try again shortly.",
-            "graphBase64": None
-        }), 200
-
-    except Exception as e:
-        logger.exception("[UNEXPECTED ERROR]")
-
-        return jsonify({
-            "answer": "Something went wrong on the server. Please try again later.",
-            "graphBase64": None
-        }), 200
+    return Response(generate_stream(), mimetype='text/event-stream')
 
 # health check
 @app.route("/health")
@@ -213,8 +189,6 @@ def translate():
 
 if __name__ == "__main__":
     print("Loading vector database...")
-
     vector_db.get_vector_db()
-
     print("Vector DB ready.")
     app.run(host="0.0.0.0", debug=True, port=5000, threaded=True)
