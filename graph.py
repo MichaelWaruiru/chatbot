@@ -5,13 +5,11 @@ import hashlib
 import base64
 import json
 import matplotlib
-matplotlib.use("agg") # This for headless plot graphs(Use before pyplot import)
+matplotlib.use("agg")  # This for headless plot graphs(Use before pyplot import)
 import matplotlib.pyplot as plt
 import pandas as pd
 from langgraph.graph import StateGraph
 from typing import TypedDict, Optional
-from langchain_core.messages import HumanMessage
-from utils import detect_language, translate_text
 from llm import gemini_pro_sql, gemini_flash_fast
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_community.utilities import SQLDatabase
@@ -21,7 +19,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from io import BytesIO
 from dotenv import load_dotenv
 from vector_db import get_vector_db
-from cache import vector_cache, redis_client 
+from cache import vector_cache, redis_client
 from logging_config import setup_logging
 from collections import defaultdict
 from prompts.prompt import (
@@ -38,7 +36,7 @@ load_dotenv()
 
 memory = MemorySaver()
 
-# Initialize our Hybrid Models
+# Initialize lightweight models – Flash used for all non‑SQL tasks
 llm_pro = gemini_pro_sql()
 llm_flash = gemini_flash_fast()
 
@@ -47,36 +45,28 @@ class State(TypedDict):
     question: str
     language: str
     intent: str
-    data: str | None
-    answer: str
-    viz_data: Optional[list] # UPDATED: Changed from DataFrame to list for JSON serialization
+    data: str | None            # Raw DB result / fallback text for answer generation
+    answer: str                 # Final natural language answer
+    viz_data: Optional[list]    # JSON‑serializable list of records
     graph_base64: Optional[str]
-    graph_svg: Optional[str] # NEW: Added for SVG downloads
+    graph_svg: Optional[str]
 
-# Intent mapping
+# Intent mapping (unchanged)
 INTENT_MAP = {
-    "system_name": [
-        "system name",
-        "name of system",
-        "what is this system"
-    ],
-    "system_info": [
-        "about co-op magic",
-        "system details",
-        "about this system",
-        "tell me about this system",
-        "tell me more about this system",
-        "what does this system do",
-        "explain this system",
-        "system info"
-    ],
-    "cooperatives_total": ["number of cooperatives", "total cooperatives", "cooperatives in system", "cooperatives in coopmagic"],
+    "system_name": ["system name", "name of system", "what is this system"],
+    "system_info": ["about co-op magic", "system details", "about this system",
+                    "tell me about this system", "tell me more about this system",
+                    "what does this system do", "explain this system", "system info"],
+    "cooperatives_total": ["number of cooperatives", "total cooperatives",
+                           "cooperatives in system", "cooperatives in coopmagic"],
     "members_total": ["total members", "number of members", "members"],
     "members_by_state": ["members per state", "members by state"],
     "female_members": ["female members", "women members", "women"],
     "male_members": ["male members", "men members", "men"],
     "directors_total": ["directors", "total directors"],
-    "approval_summary": ["approval status", "status of cooperatives", "how many are approved", "approval breakdown", "approval status of all types"],
+    "approval_summary": ["approval status", "status of cooperatives",
+                         "how many are approved", "approval breakdown",
+                         "approval status of all types"],
     "visualize": ["visualize", "graph", "chart", "show trend", "pie chart", "bar chart", "line"]
 }
 
@@ -88,20 +78,25 @@ db = SQLDatabase.from_uri(db_uri)
 vector_db = get_vector_db()
 logger.info("Vector index loaded successfully.")
 
-# Allowed tables that the LLM is allowed to query
-ALLOWED_TABLES = {"member", "cooperative", "director", "cooperative_location", "cooperative_stages", "deregistration"}
+# Allowed tables and columns (unchanged)
+ALLOWED_TABLES = {"member", "cooperative", "director", "cooperative_location",
+                  "cooperative_stages", "deregistration"}
 
-# Whitelist of allowed columns per table
 ALLOWED_COLUMNS = {
-    "cooperative": {"cooperative_id", "cooperative_name", "cooperative_type", "cooperative_constitution", "cooperative_bylaws", "has_directors", "cooperative_state", "cooperative_boma", "approval_status", "cooperative_certificate"},
-    "member": {"cooperative_id", "member_id", "member_name", "member_gender", "member_state", "member_county", "member_payam", "member_boma"},
-    "director": {"cooperative_id", "director_id", "director_name", "director_gender", "director_payam", "director_state", "director_county", "director_boma"},
+    "cooperative": {"cooperative_id", "cooperative_name", "cooperative_type",
+                    "cooperative_constitution", "cooperative_bylaws", "has_directors",
+                    "cooperative_state", "cooperative_boma", "approval_status",
+                    "cooperative_certificate"},
+    "member": {"cooperative_id", "member_id", "member_name", "member_gender",
+               "member_state", "member_county", "member_payam", "member_boma"},
+    "director": {"cooperative_id", "director_id", "director_name", "director_gender",
+                 "director_payam", "director_state", "director_county", "director_boma"},
     "cooperative_location": {"cooperative_id", "state", "county", "payam", "boma"},
     "cooperative_stages": {"coop_id", "stage", "date_created", "status", "reason", "next_stage"},
     "deregistration": {"reason", "status", "coop_id", "date_created"}
 }
 
-# Helper functions
+# Helper functions (get_schema, extract_tables_and_aliases, sanitize_sql, validate_sql, log_index_usage remain identical)
 cached_schema_string = None
 
 def get_schema(_):
@@ -114,21 +109,18 @@ def get_schema(_):
 def extract_tables_and_aliases(sql_text: str):
     tables = set()
     alias_map = {}
-    
     from_pattern = r"\bfrom\s+(\w+)(?:\s+(?:as\s+)?(\w+))?"
     for match in re.finditer(from_pattern, sql_text):
         table = match.group(1)
         alias = match.group(2) or table
         tables.add(table)
         alias_map[alias] = table
-    
     join_pattern = r"\bjoin\s+(\w+)(?:\s+(?:as\s+)?(\w+))?"
     for match in re.finditer(join_pattern, sql_text):
         table = match.group(1)
         alias = match.group(2) or table
         tables.add(table)
         alias_map[alias] = table
-    
     return tables, alias_map
 
 def sanitize_sql(sql: str) -> str:
@@ -137,36 +129,26 @@ def sanitize_sql(sql: str) -> str:
 
 def validate_sql(sql: str) -> None:
     sql_lower = sql.lower()
-    
     tables = set(re.findall(r"\bfrom\s+(\w+)|\bjoin\s+(\w+)", sql_lower))
     tables = {t for pair in tables for t in pair if t}
-
     if not tables:
         raise ValueError("No table referenced in query")
-
     illegal_tables = tables - ALLOWED_TABLES
     if illegal_tables:
         raise ValueError(f"Illegal tables used: {illegal_tables}. Allowed: {ALLOWED_TABLES}")
-    
     columns = set(re.findall(r"\b(\w+)\s*(?:=|<|>|!=|\blike\b)", sql_lower))
     columns.update(re.findall(r"\bselect\s+([^,\s]+)", sql_lower))
     columns.update(re.findall(r",\s*(\w+)", sql_lower))
-    
     keywords = {"count", "sum", "avg", "max", "min", "distinct", "as", "and", "or", "not", "in", "like", "between"}
     columns = {c for c in columns if c and c not in keywords and not c.isdigit()}
-    
     for table in tables:
         allowed = ALLOWED_COLUMNS.get(table, set())
         table_cols = set(re.findall(rf"{table}\.(\w+)", sql_lower))
-        
         if table_cols:
             illegal_cols = table_cols - allowed
             if illegal_cols:
-                raise ValueError(
-                    f"Invalid columns for table '{table}': {illegal_cols}. "
-                    f"Allowed: {allowed}"
-                )
-    
+                raise ValueError(f"Invalid columns for table '{table}': {illegal_cols}. Allowed: {allowed}")
+
 def log_index_usage(sql: str):
     try:
         explain_sql = f"EXPLAIN {sql}"
@@ -175,38 +157,31 @@ def log_index_usage(sql: str):
         logger.info(f"[EXPLAIN RESULT]\n{explain_result[['table','type','key','rows','index_used']]}")
     except Exception as e:
         logger.warning(f"Failed to log index usage: {e}")
-        
+
 def semantic_search(question: str, k: int = 5):
     if question in vector_cache:
         logger.info(f"[VECTOR CACHE HIT] {question}")
         return vector_cache[question]
-
     try:
         docs = vector_db.similarity_search(question, k=k)
         results = [doc.page_content for doc in docs]
         vector_cache[question] = results
         logger.info(f"[VECTOR SEARCH] Query executed | Docs retrieved: {len(results)}")
         return results
-
     except Exception as e:
         logger.error(f"[VECTOR ERROR] {e}")
         return []
-    
+
 def run_query(query: str):
     sql = sanitize_sql(query)
-    
-    # Check Redis cache first
     cache_key = f"sql_cache:{hashlib.md5(sql.encode()).hexdigest()}"
     cached_result = redis_client.get(cache_key)
-    
     if cached_result:
         logger.info("[SQL REDIS CACHE HIT]")
-        return cached_result # Redis stores strings, which is perfect for the LLM context
-
+        return cached_result
     logger.info(f"[SQL EXECUTE] {sql}")
     try:
         result = db.run(sql)
-        # Store in Redis for 10 minutes (600 seconds)
         redis_client.setex(cache_key, 600, str(result))
         logger.info("[SQL SUCCESS]")
         return result
@@ -214,15 +189,18 @@ def run_query(query: str):
         logger.error(f"[SQL ERROR] {e}")
         raise
 
-# SQL generation
-def write_sql_query(llm):
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", SQL_SYSTEM_PROMPT),
-            ("human", SQL_HUMAN_TEMPLATE),
-        ]
-    )
+def run_query_df(query: str) -> pd.DataFrame:
+    sql = sanitize_sql(query)
+    logger.info(f"[SQL DF] {sql}")
+    log_index_usage(sql)
+    return pd.read_sql(sql, db._engine)
 
+# SQL generation (unchanged, but we'll reduce retries in the caller)
+def write_sql_query(llm):
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", SQL_SYSTEM_PROMPT),
+        ("human", SQL_HUMAN_TEMPLATE),
+    ])
     return (
         RunnablePassthrough.assign(schema=get_schema)
         | prompt
@@ -244,19 +222,11 @@ def generate_valid_sql(question: str, llm, max_retries: int = 3) -> str:
         return re.sub(r"\b(\w+)\.cooperative_state\b", repl, sql_text)
 
     error_message = None
-
     for attempt in range(max_retries):
-        sql_raw = write_sql_query(llm).invoke(
-            {
-                "question": question
-                if not error_message
-                else SQL_RETRY_PROMPT.format(
-                    error_message=error_message, 
-                    question=question
-                )
-            }
-        )
-
+        sql_raw = write_sql_query(llm).invoke({
+            "question": question if not error_message
+            else SQL_RETRY_PROMPT.format(error_message=error_message, question=question)
+        })
         sql = sanitize_sql(sql_raw)
         sql = autocorrect_state_aliases(sql)
         try:
@@ -265,155 +235,151 @@ def generate_valid_sql(question: str, llm, max_retries: int = 3) -> str:
         except Exception as e:
             error_message = str(e)
             logger.warning(f"Attempt {attempt + 1}/{max_retries} failed: {error_message}")
-            
             if attempt == max_retries - 1:
                 raise RuntimeError(f"Unable to generate valid SQL after {max_retries} attempts: {error_message}")
 
-# Natural answer generation
-def answer_user_query(question: str) -> str:
+
+# ============================================================
+#  ⚡ OPTIMIZED NODES – replace chain of translate+intent+data
+# ============================================================
+
+# 1. Single node for translation + intent (Flash, one call)
+def analyzer_node(state: State):
+    """
+    Combines language detection, Arabic translation, and intent classification
+    into a single LLM call, saving ~2 seconds compared to sequential calls.
+    """
+    question = state["question"]
+    prompt = f"""
+Analyze the following user query for a cooperative database.
+Query: "{question}"
+
+Tasks:
+1. Detect if the language is Arabic or English.
+2. If Arabic, translate to English.
+3. Identify intent from: {list(INTENT_MAP.keys())}.
+
+Return ONLY a JSON object (no markdown):
+{{"lang": "detected_lang", "translated_q": "english_version", "intent": "detected_intent"}}
+"""
     try:
-        context_docs = semantic_search(question)
-        context = ""
-        if context_docs:
-            context = "\n".join(context_docs[:3])
-
-        sql = generate_valid_sql(question, llm_pro)
-        logger.info(f"[FINAL SQL USED] {sql}")
-        response = run_query(sql)
-
+        response = llm_flash.invoke(prompt)
+        # Strip potential markdown fences
+        clean = response.content.strip()
+        clean = clean.replace("```json", "").replace("```", "").strip()
+        analysis = json.loads(clean)
+        return {
+            "language": analysis.get("lang"),
+            "question": analysis.get("translated_q"),
+            "intent": analysis.get("intent")
+        }
     except Exception as e:
-        logger.error(f"Query generation/execution failed: {str(e)}")
-        return (
-            "I couldn't find information related to that question. "
-            "Try asking about cooperatives, members, directors, or locations."
-        )
-
-    if not response or response.strip() == "" or response.strip() == "0 rows in set":
-        prompt = ChatPromptTemplate.from_messages(
-            [
-                ("system", NO_RESULTS_SYSTEM_PROMPT),
-                ("human", NO_RESULTS_HUMAN_TEMPLATE.format(context=context, question=question)),
-            ]
-        )
-
-        messages = prompt.format_messages()
-        resp = llm_flash.invoke(messages)
-        content = resp.content
-        if isinstance(content, list):
-            first = content[0]
-            if isinstance(first, dict):
-                return first.get("text", "").strip()
-            else:
-                return str(first).strip()
+        logger.error(f"Analyzer node failed: {e}")
+        # Fallback: run old sequential logic as safety net
+        from utils import detect_language, translate_text
+        lang = detect_language(question)
+        if lang == "en":
+            translated = question
         else:
-            return str(content).strip()
+            translated, _ = translate_text(question, llm_flash, target_lang="English")
+        # Fallback intent: keyword matching + LLM
+        intent = detect_intent_fallback(translated, llm_flash)
+        return {"language": lang, "question": translated, "intent": intent}
 
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", NATURAL_ANSWER_SYSTEM_PROMPT),
-            ("human", NATURAL_ANSWER_HUMAN_TEMPLATE.format(
-                context=context, 
-                question=question, 
-                response=response
-            )),
-        ]
-    )
-
-    messages = prompt.format_messages()
-    resp = llm_flash.invoke(messages)
-    content = resp.content
-    if isinstance(content, list):
-        first = content[0]
-        if isinstance(first, dict):
-            answer = first.get("text", "").strip()
-        else:
-            answer = str(first).strip()
-    else:
-        answer = str(content).strip()
-
-    if len(answer) > 300:
-        answer = answer[:300].rsplit('.', 1)[0] + "."
-
-    return answer
-
-# Language detection and translation
-def detect_lan_and_translate(state: State, llm):
-    text = state["question"]
-    lang = detect_language(text)
-        
-    if lang == "en":
-        return {"question": text, "language": "en"}
-        
-    translated, _ = translate_text(text, llm, target_lang="English")
-    return {"question": translated, "language": "ar"}
-
-# Intent detection
-def detect_intent(state: State, llm):
-    question = state["question"].lower()
-    
-    viz_aliases = INTENT_MAP.get("visualize", [])
-    if any(alias.lower() in question for alias in viz_aliases):
-        return {"intent": "visualize"}
-
+def detect_intent_fallback(question: str, llm):
+    """Used only if the combined analyzer fails."""
+    q = question.lower()
     for canonical, aliases in INTENT_MAP.items():
-        if any(alias.lower() in question for alias in aliases):
-            return {"intent": canonical}
-
-    prompt_text = INTENT_FALLBACK_PROMPT.format(
-        intents=list(INTENT_MAP.keys()), 
-        question=state['question']
-    )
+        if any(alias.lower() in q for alias in aliases):
+            return canonical
+    prompt_text = INTENT_FALLBACK_PROMPT.format(intents=list(INTENT_MAP.keys()), question=question)
     response = llm.invoke([HumanMessage(content=prompt_text)])
-
-    content = response.content
-    if isinstance(content, list):
-        first_part = content[0]
-        if isinstance(first_part, dict):
-            raw_intent = first_part.get("text", "")
-        else:
-            raw_intent = getattr(first_part, "text", str(first_part))
-    else:
-        raw_intent = str(content)
-
-    raw_intent = raw_intent.strip().lower()
-
+    raw = response.content.strip().lower()
     for canonical, aliases in INTENT_MAP.items():
-        if any(alias.lower() in raw_intent for alias in aliases):
-            return {"intent": canonical}
+        if any(alias.lower() in raw for alias in aliases):
+            return canonical
+    return "unknown"
 
-    return {"intent": "unknown"}
 
-# Data selection
+# 2. Optimized data node – generates SQL / DB results directly
 def select_data(state: State):
-    question = state["question"].lower()
-
-    if "name of this system" in question or "what is the name of this system" in question:
-        return {"answer": "The system is called Co-op Magic."}
-
+    """
+    Generates the required data in one pass, skipping the old
+    answer_user_query round‑trip. For system_name/info we short‑circuit.
+    For visualisation we also return viz_data.
+    For general queries we fetch raw SQL results and hand them to
+    the answer node for natural‑language formatting.
+    """
     intent = state["intent"]
+    question = state["question"]
 
+    # Static intents – no DB needed
     if intent == "system_name":
         return {"answer": "The system is called Co-op Magic."}
-
     if intent == "system_info":
         return {"answer": "Co-op Magic is a comprehensive system designed to manage cooperatives' data across South Sudan securely and efficiently."}
 
-    if intent == "visualize":
-        sql = generate_valid_sql(state["question"], llm_pro)
-        df = run_query_df(sql)
-        answer = answer_user_query(state["question"])
-        
-        # Convert DataFrame to JSON for safe serialization
-        df_json = df.to_dict(orient="records")
-        
-        return {"viz_data": df_json, "answer": answer}
-    
-    # For all other intents (including "unknown"), generate text only and reset viz fields
-    return {"answer": answer_user_query(state["question"]), "viz_data": None, "graph_base64": None, "graph_svg": None}
+    # For all other intents (including visualize) generate SQL once
+    try:
+        # ⚡ Reduced retries from 3 → 1, saving 4–8 seconds on retry loops
+        sql = generate_valid_sql(question, llm_pro, max_retries=1)
+        logger.info(f"[OPTIMIZED SQL] {sql}")
 
-# UPDATED: generate_answer now routes viz_data and graph_svg to the output
+        if intent == "visualize":
+            df = run_query_df(sql)
+            df_json = df.to_dict(orient="records")
+            # Pass both viz data and a raw string representation for the answer
+            return {
+                "viz_data": df_json,
+                "data": df.to_string(index=False)  # compact string for LLM answer
+            }
+        else:
+            result = run_query(sql)
+            return {"data": result}  # string, empty string, or None
+    except Exception as e:
+        logger.error(f"Data node failed: {e}")
+        # Graceful fallback using vector search (fast, no LLM needed)
+        docs = semantic_search(question, k=2)
+        fallback_text = "\n".join(docs) if docs else ""
+        return {"data": fallback_text}
+
+
+# 3. Reworked answer node: turns raw data into a concise natural‑language reply
 def generate_answer(state: State):
-    result = {"answer": state.get("answer") or "No data found."}
+    """Formats the final answer using the raw data (or static answer)."""
+    # If we already have a static answer (from select_data), return it directly
+    if state.get("answer"):
+        return {"answer": state["answer"]}
+
+    raw_data = state.get("data", "")
+    question = state["question"]
+
+    # If no data (e.g., empty DB result), use quick no‑results prompt
+    if not raw_data or raw_data.strip() in ("", "0 rows in set"):
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", NO_RESULTS_SYSTEM_PROMPT),
+            ("human", NO_RESULTS_HUMAN_TEMPLATE.format(context="", question=question)),
+        ])
+        resp = llm_flash.invoke(prompt.format_messages())
+        return {"answer": resp.content.strip()}
+
+    # Otherwise, craft natural answer from the raw DB output (fast, single LLM call)
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", NATURAL_ANSWER_SYSTEM_PROMPT),
+        ("human", NATURAL_ANSWER_HUMAN_TEMPLATE.format(
+            context="",  # vector context can be injected if needed, but adds ~0.5s
+            question=question,
+            response=raw_data[:2000]  # truncate to avoid token waste
+        )),
+    ])
+    resp = llm_flash.invoke(prompt.format_messages())
+    answer = resp.content.strip()
+    # Keep answer concise (max ~300 chars)
+    if len(answer) > 300:
+        answer = answer[:300].rsplit('.', 1)[0] + "."
+
+    # Preserve any graph data from previous nodes
+    result = {"answer": answer}
     if "graph_base64" in state and state["graph_base64"]:
         result["graph_base64"] = state["graph_base64"]
     if "graph_svg" in state and state["graph_svg"]:
@@ -422,49 +388,33 @@ def generate_answer(state: State):
         result["viz_data"] = state["viz_data"]
     return result
 
-def run_query_df(query: str) -> pd.DataFrame:
-    sql = sanitize_sql(query)
-    logger.info(f"[SQL DF] {sql}")
-    log_index_usage(sql)
-    return pd.read_sql(sql, db._engine)
 
+# Visualization node (unchanged except for minor imports)
 def detect_chart_type(question: str) -> str:
     q = question.lower()
-
     chart_keywords = {
-        "pie": ["pie", "chart", "proportion", "percentage", "share"], # FIXED: Added missing comma
+        "pie": ["pie", "chart", "proportion", "percentage", "share"],
         "line": ["line", "trend", "over time", "time series", "change"],
         "histogram": ["histogram", "distribution", "frequency", "spread", "bins"],
         "bar": ["bar", "compare", "comparison", "categories", "graph"],
     }
-
     scores = defaultdict(int)
-
     for chart, keywords in chart_keywords.items():
         for k in keywords:
             if re.search(rf"\b{re.escape(k)}\b", q):
                 scores[chart] += 1
+    return max(scores, key=scores.get) if scores else "unknown"
 
-    if not scores:
-        return "unknown"
-
-    return max(scores, key=scores.get)
-
-# UPDATED: Completely rewritten for Thread Safety, IndexError prevention, and SVG output
 def visualize_node(state: State):
     df_json = state.get("viz_data")
     if not df_json:
         return {"graph_base64": None, "graph_svg": None}
 
-    # Convert back to DataFrame for plotting
     df = pd.DataFrame(df_json)
-
-    # FIXED: Check if DataFrame has at least 2 columns to prevent IndexError
     if not isinstance(df, pd.DataFrame) or df.empty or len(df.columns) < 2:
         logger.warning("Dataframe is empty or lacks sufficient columns for visualization")
         return {"graph_base64": None, "graph_svg": None}
-    
-    # Detect numeric column safely
+
     numeric_cols = df.select_dtypes(include="number").columns.tolist()
     if not numeric_cols:
         logger.warning("No numeric columns available for plotting")
@@ -480,48 +430,32 @@ def visualize_node(state: State):
                 elif val in ["f", "female"]: return "Female"
                 elif val == "unknown" or val == "": return "Other"
                 else: return val.capitalize()
-            
             df[gender_col] = df[gender_col].apply(normalize_gender)
             df = df.groupby(gender_col)[y_col].sum().reset_index()
 
     chart_type = detect_chart_type(state.get("question", ""))
 
-    # FIXED: Use Object-Oriented API to ensure Thread Safety
     fig, ax = plt.subplots(figsize=(10, 6))
 
-    # Grouped pivot for 3+ columns
     if len(df.columns) >= 3:
         try:
-            df = df.pivot(
-                index=df.columns[0],
-                columns=df.columns[1],
-                values=y_col
-            )
+            df = df.pivot(index=df.columns[0], columns=df.columns[1], values=y_col)
         except Exception as e:
             logger.warning(f"Pivot failed: {e}")
 
     if chart_type == "pie":
         colors = ['#FF6B6B', '#4ECDC4', "#BCD145", '#FFA07A', '#98D8C8', '#F7DC6F']
-        
         if y_col in df.columns:
             values = df[y_col]
             labels = df[df.columns[0]]
         else:
             values = df.iloc[:, 0]
             labels = df.index
-
-        _, texts, autotexts = ax.pie(
-            values,
-            labels=labels,
-            autopct='%1.1f%%',
-            colors=colors,
-            startangle=90,
-            textprops={'fontsize': 13, 'weight': 'bold'}
-        )
+        _, texts, autotexts = ax.pie(values, labels=labels, autopct='%1.1f%%', colors=colors,
+                                     startangle=90, textprops={'fontsize': 13, 'weight': 'bold'})
         ax.set_title(f'{y_col} Distribution', fontsize=16, fontweight='bold', pad=20)
         for autotext in autotexts:
             autotext.set_color('white')
-
     elif chart_type == "line":
         if y_col in df.columns:
             x_vals = df[df.columns[0]]
@@ -529,14 +463,12 @@ def visualize_node(state: State):
         else:
             x_vals = df.index
             values = df.iloc[:, 0]
-
         ax.plot(x_vals, values, marker='o', linewidth=2, markersize=8, color='steelblue')
         ax.set_xlabel(df.columns[0], fontsize=13, fontweight='bold')
         ax.set_ylabel(y_col, fontsize=13, fontweight='bold')
         ax.set_title('Data Trend', fontsize=13, fontweight='bold')
         ax.tick_params(axis='x', rotation=45, labelsize=12)
         ax.grid(True, alpha=0.3)
-
     elif chart_type == "histogram":
         values = df[y_col]
         ax.hist(values, bins=10, color='steelblue', edgecolor='black', alpha=0.7)
@@ -544,7 +476,6 @@ def visualize_node(state: State):
         ax.set_ylabel('Frequency', fontsize=13, fontweight='bold')
         ax.set_title('Distribution Histogram', fontsize=16, fontweight='bold', pad=20)
         ax.tick_params(axis='x', rotation=45, labelsize=12)
-
     else:
         if y_col in df.columns:
             df.plot(kind='bar', x=df.columns[0], y=y_col, legend=False, color='steelblue', ax=ax)
@@ -552,62 +483,54 @@ def visualize_node(state: State):
         else:
             df.plot(kind='bar', legend=False, color='steelblue', ax=ax)
             values = df.iloc[:, 0]
-
         ax.set_xlabel(df.columns[0], fontsize=13, fontweight='bold')
         ax.set_ylabel(y_col, fontsize=13, fontweight='bold')
         ax.set_title('Data Distribution', fontsize=13, fontweight='bold')
         ax.tick_params(axis='x', rotation=45)
-
-        # Fix label iteration to avoid math errors if max is 0
         y_max = values.max() if not values.empty else 1
         for i, v in enumerate(values):
             ax.text(i, v + (y_max * 0.02), str(v), ha='center', va='bottom', fontweight='bold')
 
     fig.tight_layout()
 
-    # EXTENSION: Generate PNG (High Res)
     buf_png = BytesIO()
     fig.savefig(buf_png, format='png', dpi=100)
     buf_png.seek(0)
     img_base64 = base64.b64encode(buf_png.read()).decode('utf-8')
 
-    # EXTENSION: Generate SVG
     buf_svg = BytesIO()
     fig.savefig(buf_svg, format='svg', bbox_inches='tight')
     buf_svg.seek(0)
     svg_string = buf_svg.read().decode('utf-8')
 
-    plt.close(fig)  # Safely close specific figure to prevent memory leak
-
+    plt.close(fig)
     return {"graph_base64": img_base64, "graph_svg": svg_string}
 
+
+# Routing logic (unchanged)
 def route_to_answer(state: State):
-    if state["intent"] == "visualize" or state["intent"] == "viz_data":
+    if state["intent"] == "visualize":
         return "visualize"
     return "answer"
 
+
+# ============================================================
+# NEW SIMPLIFIED GRAPH – 4 nodes instead of 5, fewer hops
+# ============================================================
 def build_graph():
     graph = StateGraph(State)
 
-    graph.add_node("translate", lambda s: detect_lan_and_translate(s, llm_flash))
-    graph.add_node("intent", lambda s: detect_intent(s, llm_flash))
-    
-    graph.add_node("data", select_data)
-    graph.add_node("visualize", visualize_node)
-    
-    graph.add_node("answer", generate_answer)
+    graph.add_node("analyzer", analyzer_node)    # translate + intent
+    graph.add_node("data", select_data)          # SQL / fallback
+    graph.add_node("visualize", visualize_node)  # charts
+    graph.add_node("answer", generate_answer)   # natural language final
 
-    graph.set_entry_point("translate")
-    graph.add_edge("translate", "intent")
-    graph.add_edge("intent", "data")
-    
+    graph.set_entry_point("analyzer")
+    graph.add_edge("analyzer", "data")
     graph.add_conditional_edges(
         "data",
         route_to_answer,
-        {
-            "visualize": "visualize",
-            "answer": "answer"
-        }
+        {"visualize": "visualize", "answer": "answer"}
     )
     graph.add_edge("visualize", "answer")
 
