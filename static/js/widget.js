@@ -77,6 +77,42 @@
           border-radius: 12px; color: #555; transition: all 0.2s ease;
       }
       .translate-btn:hover { background: #e4e4e4; color: #333; }
+      /* Typing Indicator Animation */
+      .typing-indicator {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          padding: 16px 18px;
+          background: #ffffff;
+          border: 1px solid #eee;
+          border-radius: 18px;
+          border-bottom-left-radius: 4px;
+          max-width: fit-content;
+          align-self: flex-start;
+          box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+      }
+      .typing-indicator .dot {
+          width: 8px;
+          height: 8px;
+          background-color: #00a859;
+          border-radius: 50%; /* Strictly circular */
+          opacity: 0.4;
+          animation: rainDropPulse 1.2s infinite ease-in-out;
+      }
+      .typing-indicator .dot:nth-child(1) { animation-delay: 0s; }
+      .typing-indicator .dot:nth-child(2) { animation-delay: 0.2s; }
+      .typing-indicator .dot:nth-child(3) { animation-delay: 0.4s; }
+
+      @keyframes rainDropPulse {
+          0%, 100% { transform: translateY(0) scale(1); opacity: 0.4; }
+          50% { transform: translateY(-4px) scale(1.1); opacity: 1; }
+      }
+      
+      /* Button Loading State */
+      #coop-magic-form button:disabled {
+          background: #80d4ac; /* Faded green */
+          cursor: not-allowed;
+      }
     `;
     const styleSheet = document.createElement("style");
     styleSheet.type = "text/css";
@@ -249,22 +285,45 @@
         const message = input.value.trim();
         if (!message) return;
 
+        // 1. Add user message
         addMessage(message, "user"); 
         input.value = "";
+        
+        // 2. Disable input and button, change button text
         input.disabled = true;
+        const submitBtn = form.querySelector("button[type='submit']");
+        const originalBtnText = submitBtn.textContent;
+        submitBtn.disabled = true;
+        submitBtn.textContent = "Wait...";
+
+        // 3. Inject the animated typing indicator
+        const typingDiv = document.createElement("div");
+        typingDiv.className = "typing-indicator";
+        typingDiv.innerHTML = '<div class="dot"></div><div class="dot"></div><div class="dot"></div>';
+        messages.appendChild(typingDiv);
+        messages.scrollTop = messages.scrollHeight;
 
         try {
+            // 4. Send request to the backend
             const res = await fetch(`${API_BASE}/chat`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ message })
             });
             const data = await res.json();
+            
+            // 5. Remove the typing animation BEFORE showing the answer
+            typingDiv.remove();
+            
             addBotMessage(data); 
         } catch (err) {
+            typingDiv.remove();
             addBotMessage({ answer: "Sorry, something went wrong connecting to the server." });
         } finally {
+            // 6. Restore input and button states
             input.disabled = false;
+            submitBtn.disabled = false;
+            submitBtn.textContent = originalBtnText;
             input.focus();
         }
     });
