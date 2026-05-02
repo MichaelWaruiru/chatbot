@@ -1,5 +1,5 @@
 
-(function() {
+(function () {
     // 1. Hardcode your backend URL.
     const API_BASE = "https://ai.co-opmagic.org";
     // 2. Inject Modern Scoped CSS
@@ -126,7 +126,7 @@
     });
 
     clearBtn.addEventListener("click", () => {
-        if(confirm("Are you sure you want to clear the chat history?")) {
+        if (confirm("Are you sure you want to clear the chat history?")) {
             localStorage.removeItem("coop_magic_history");
             chatHistory = [];
             messages.innerHTML = "";
@@ -152,32 +152,46 @@
         if (data.answer) {
             const wrapper = document.createElement("div");
             wrapper.className = "message bot";
-            
+
             const content = document.createElement("span");
             content.textContent = data.answer;
             wrapper.appendChild(content);
 
             const isArabic = /[\u0600-\u06FF]/.test(data.answer);
             let currentLang = isArabic ? "ar" : "en";
+
+            // Cache original text
+            const originalText = data.answer;
+            const translations = {
+                "en": data.answer,
+                "ar": null
+            };
+
             const btn = document.createElement("button");
             btn.className = "translate-btn";
             btn.textContent = isArabic ? "Translate to English" : "Translate to Arabic";
-            
+
             btn.onclick = async () => {
                 btn.disabled = true;
+                const targetLang = currentLang === "en" ? "ar" : "en";
                 btn.textContent = "Translating...";
                 try {
-                    const res = await fetch(`${API_BASE}/translate`, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            text: content.textContent,
-                            target_lang: currentLang === "en" ? "Arabic" : "English"
-                        })
-                    });
-                    const resData = await res.json();
-                    content.textContent = resData.translation;
-                    currentLang = currentLang === "en" ? "ar" : "en";
+                    if (translations[targetLang]) {
+                        content.textContent = translations[targetLang];
+                    } else {
+                        const res = await fetch(`${API_BASE}/translate`, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                                text: originalText,  // Always from original
+                                target_lang: targetLang === "en" ? "English" : "Arabic"
+                            })
+                        });
+                        const resData = await res.json();
+                        translations[targetLang] = resData.translation;
+                        content.textContent = resData.translation;
+                    }
+                    currentLang = targetLang;
                     btn.textContent = currentLang === "en" ? "Translate to Arabic" : "Translate to English";
                 } catch (err) {
                     console.error(err);
@@ -199,7 +213,7 @@
             img.style.borderRadius = "8px";
             img.style.marginTop = "10px";
             img.style.border = "1px solid #ccc";
-            
+
             const wrapper = document.createElement("div");
             wrapper.className = "message bot";
             wrapper.appendChild(img);
@@ -211,13 +225,13 @@
             svgContainer.innerHTML = data.graphSvg;
             svgContainer.style.maxWidth = "100%";
             svgContainer.style.marginTop = "10px";
-            
+
             const svgElement = svgContainer.querySelector("svg");
             if (svgElement) {
                 svgElement.style.width = "100%";
                 svgElement.style.height = "auto";
             }
-            
+
             const wrapper = document.createElement("div");
             wrapper.className = "message bot";
             wrapper.appendChild(svgContainer);
@@ -241,7 +255,7 @@
             }
         });
     } else {
-        addBotMessage({ answer: "👋 Hello! I'm Co-op Magic AI Assistant. Ask me anything about cooperatives in South Sudan." }, false);
+        addBotMessage({ answer: "👋 Hello! I'm Co-op Magic AI Assistant. Ask me anything about cooperatives in South Sudan. I can translate both English and Arabic." }, false);
     }
 
     form.addEventListener("submit", async (e) => {
@@ -249,7 +263,7 @@
         const message = input.value.trim();
         if (!message) return;
 
-        addMessage(message, "user"); 
+        addMessage(message, "user");
         input.value = "";
         input.disabled = true;
 
@@ -260,7 +274,7 @@
                 body: JSON.stringify({ message })
             });
             const data = await res.json();
-            addBotMessage(data); 
+            addBotMessage(data);
         } catch (err) {
             addBotMessage({ answer: "Sorry, something went wrong connecting to the server." });
         } finally {

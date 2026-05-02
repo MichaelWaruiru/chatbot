@@ -96,41 +96,41 @@ function addBotMessage(text, graphBase64, graphSvg, vizData) {
     toolBar.style.display = "flex";
     toolBar.style.gap = "8px";
     toolBar.style.flexWrap = "wrap";
-    
+
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
 
     // PNG Download
     const btnPng = document.createElement("button");
     btnPng.textContent = "📥 PNG";
-    btnPng.className = "translate-btn"; 
+    btnPng.className = "translate-btn";
     btnPng.onclick = () => downloadFile(`data:image/png;base64,${graphBase64}`, `chart_${timestamp}.png`);
     toolBar.appendChild(btnPng);
 
     // SVG Download
     if (graphSvg) {
-        const btnSvg = document.createElement("button");
-        btnSvg.textContent = "📥 SVG";
-        btnSvg.className = "translate-btn";
-        const svgBlob = new Blob([graphSvg], {type: "image/svg+xml;charset=utf-8"});
-        btnSvg.onclick = () => downloadFile(URL.createObjectURL(svgBlob), `chart_${timestamp}.svg`);
-        toolBar.appendChild(btnSvg);
+      const btnSvg = document.createElement("button");
+      btnSvg.textContent = "📥 SVG";
+      btnSvg.className = "translate-btn";
+      const svgBlob = new Blob([graphSvg], { type: "image/svg+xml;charset=utf-8" });
+      btnSvg.onclick = () => downloadFile(URL.createObjectURL(svgBlob), `chart_${timestamp}.svg`);
+      toolBar.appendChild(btnSvg);
     }
 
     // CSV/JSON Data Downloads
     if (vizData && vizData.length > 0) {
-        const btnCsv = document.createElement("button");
-        btnCsv.textContent = "📥 CSV";
-        btnCsv.className = "translate-btn";
-        const csvBlob = new Blob([extractCSV(vizData)], {type: "text/csv;charset=utf-8;"});
-        btnCsv.onclick = () => downloadFile(URL.createObjectURL(csvBlob), `data_${timestamp}.csv`);
-        toolBar.appendChild(btnCsv);
+      const btnCsv = document.createElement("button");
+      btnCsv.textContent = "📥 CSV";
+      btnCsv.className = "translate-btn";
+      const csvBlob = new Blob([extractCSV(vizData)], { type: "text/csv;charset=utf-8;" });
+      btnCsv.onclick = () => downloadFile(URL.createObjectURL(csvBlob), `data_${timestamp}.csv`);
+      toolBar.appendChild(btnCsv);
 
-        const btnJson = document.createElement("button");
-        btnJson.textContent = "📥 JSON";
-        btnJson.className = "translate-btn";
-        const jsonBlob = new Blob([JSON.stringify(vizData, null, 2)], {type: "application/json"});
-        btnJson.onclick = () => downloadFile(URL.createObjectURL(jsonBlob), `data_${timestamp}.json`);
-        toolBar.appendChild(btnJson);
+      const btnJson = document.createElement("button");
+      btnJson.textContent = "📥 JSON";
+      btnJson.className = "translate-btn";
+      const jsonBlob = new Blob([JSON.stringify(vizData, null, 2)], { type: "application/json" });
+      btnJson.onclick = () => downloadFile(URL.createObjectURL(jsonBlob), `data_${timestamp}.json`);
+      toolBar.appendChild(btnJson);
     }
 
     content.appendChild(toolBar);
@@ -141,6 +141,13 @@ function addBotMessage(text, graphBase64, graphSvg, vizData) {
   // Language detection (Arabic regex)
   const isArabic = /[\u0600-\u06FF]/.test(text);
   let currentLang = isArabic ? "ar" : "en";
+
+  // Cache original text - This prevents re-translation drift
+  const originalText = text;
+  const translations = {
+    "en": text,
+    "ar": null  // Will be fetched on first translate
+  };
 
   const btn = document.createElement("button");
   btn.className = "translate-btn";
@@ -153,26 +160,35 @@ function addBotMessage(text, graphBase64, graphSvg, vizData) {
       return;
     }
     btn.disabled = true;
+    const targetLang = currentLang === "en" ? "ar" : "en";
     btn.textContent = "Translating…";
 
     try {
-      const res = await fetch(`${API_BASE}/translate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text: textSpan.textContent,
-          target_lang: currentLang === "en" ? "Arabic" : "English"
-        })
-      });
+      // If we already have this translation cached, use it
+      if (translations[targetLang]) {
+        textSpan.textContent = translations[targetLang];
+      } else {
+        // Fetch new translation
+        const res = await fetch(`${API_BASE}/translate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text: originalText,  // Always translate from ORIGINAL, not current
+            target_lang: targetLang === "en" ? "English" : "Arabic"
+          })
+        });
 
-      if (!res.ok) throw new Error("Translation API error");
+        if (!res.ok) throw new Error("Translation API error");
 
-      const data = await res.json();
+        const data = await res.json();
 
-      textSpan.textContent = data.translation;
+        // Cache this translation
+        translations[targetLang] = data.translation;
+        textSpan.textContent = data.translation;
+      }
 
       // Toggle language state
-      currentLang = currentLang === "en" ? "ar" : "en";
+      currentLang = targetLang;
       btn.textContent = currentLang === "en" ? "Translate to Arabic" : "Translate to English";
 
     } catch (err) {
@@ -261,7 +277,7 @@ form.addEventListener("submit", async (e) => {
     enableChatInput(); // Re-enable input
 
     // UPDATED: Pass the additional data points into the rendering function
-    addBotMessage(data.answer, data.graphBase64, data.graphSvg, data.vizData); 
+    addBotMessage(data.answer, data.graphBase64, data.graphSvg, data.vizData);
 
   } catch (err) {
     typingElem.remove();
