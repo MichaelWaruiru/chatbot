@@ -4,6 +4,7 @@ import logging
 import hashlib
 import base64
 import json
+import concurrent.futures # NEW: Added for parallel execution
 import matplotlib
 matplotlib.use("agg") # This for headless plot graphs(Use before pyplot import)
 import matplotlib.pyplot as plt
@@ -271,12 +272,19 @@ def generate_valid_sql(question: str, llm, max_retries: int = 3) -> str:
 # Natural answer generation
 def answer_user_query(question: str) -> str:
     try:
-        context_docs = semantic_search(question)
+        # UPDATED: Parallel execution for faster response times
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            # Launch SQL generation (using the faster flash model) and Vector Search at the same time
+            future_sql = executor.submit(generate_valid_sql, question, llm_flash)
+            future_context = executor.submit(semantic_search, question)
+            
+            sql = future_sql.result()
+            context_docs = future_context.result()
+            
         context = ""
         if context_docs:
             context = "\n".join(context_docs[:3])
 
-        sql = generate_valid_sql(question, llm_pro)
         logger.info(f"[FINAL SQL USED] {sql}")
         response = run_query(sql)
 
@@ -587,18 +595,14 @@ def route_to_answer(state: State):
 
 def build_graph():
     graph = StateGraph(State)
-
-    graph.add_node("translate", lambda s: detect_lan_and_translate(s, llm_flash))
-    graph.add_node("intent", lambda s: detect_intent(s, llm_flash))
-    
+    # Combined node
+    graph.add_node("preprocess", preprocess_node) 
     graph.add_node("data", select_data)
     graph.add_node("visualize", visualize_node)
-    
     graph.add_node("answer", generate_answer)
 
-    graph.set_entry_point("translate")
-    graph.add_edge("translate", "intent")
-    graph.add_edge("intent", "data")
+    graph.set_entry_point("preprocess")
+    graph.add_edge("preprocess", "data")
     
     graph.add_conditional_edges(
         "data",
@@ -609,5 +613,4 @@ def build_graph():
         }
     )
     graph.add_edge("visualize", "answer")
-
     return graph.compile(checkpointer=memory)

@@ -1,4 +1,3 @@
-
 (function() {
     // 1. Hardcode your backend URL.
     const API_BASE = "https://ai.co-opmagic.org";
@@ -50,12 +49,32 @@
       }
       .message.user { 
           background: #00a859; color: white; align-self: flex-end; 
-          border-bottom-right-radius: 4px; /* Creates a modern chat bubble 'tail' */
+          border-bottom-right-radius: 4px;
       }
       .message.bot { 
           background: #ffffff; color: #333; align-self: flex-start; 
           border-bottom-left-radius: 4px; border: 1px solid #eee;
       }
+
+      /* TYPING BUBBLE ANIMATION */
+      .typing-bubble {
+          display: flex; align-items: center; gap: 4px;
+          background: #ffffff; padding: 12px 16px;
+          border-radius: 18px; width: fit-content;
+          border-bottom-left-radius: 4px; border: 1px solid #eee;
+      }
+      .dot {
+          width: 6px; height: 6px; background: #00a859;
+          border-radius: 50%; opacity: 0.4;
+          animation: blink 1.4s infinite both;
+      }
+      .dot:nth-child(2) { animation-delay: 0.2s; }
+      .dot:nth-child(3) { animation-delay: 0.4s; }
+      @keyframes blink {
+          0%, 80%, 100% { opacity: 0.2; transform: scale(1); }
+          40% { opacity: 1; transform: scale(1.2); }
+      }
+
       #coop-magic-form { 
           display: flex; border-top: 1px solid #eaeaea; padding: 12px; background: white; 
       }
@@ -117,6 +136,21 @@
 
     function saveHistory() {
         localStorage.setItem("coop_magic_history", JSON.stringify(chatHistory));
+    }
+
+    // --- TYPING INDICATOR HELPERS ---
+    function showTyping() {
+        const div = document.createElement("div");
+        div.id = "coop-magic-typing";
+        div.className = "typing-bubble bot";
+        div.innerHTML = '<div class="dot"></div><div class="dot"></div><div class="dot"></div>';
+        messages.appendChild(div);
+        messages.scrollTop = messages.scrollHeight;
+    }
+
+    function hideTyping() {
+        const el = document.getElementById("coop-magic-typing");
+        if (el) el.remove();
     }
 
     toggleBtn.addEventListener("click", () => {
@@ -253,6 +287,8 @@
         input.value = "";
         input.disabled = true;
 
+        showTyping(); // SHOW BUBBLE LOGIC[cite: 1]
+
         try {
             const res = await fetch(`${API_BASE}/chat`, {
                 method: "POST",
@@ -260,8 +296,10 @@
                 body: JSON.stringify({ message })
             });
             const data = await res.json();
+            hideTyping(); // HIDE BUBBLE LOGIC[cite: 1]
             addBotMessage(data); 
         } catch (err) {
+            hideTyping(); // HIDE BUBBLE LOGIC[cite: 1]
             addBotMessage({ answer: "Sorry, something went wrong connecting to the server." });
         } finally {
             input.disabled = false;
