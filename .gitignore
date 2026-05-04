@@ -5,3 +5,4 @@ echo "__pycache__/" >> .gitignore
 .venv/
 __pycache__/
 vector_index/
+vector_last_update.txt
