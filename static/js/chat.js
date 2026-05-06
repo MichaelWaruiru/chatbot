@@ -66,7 +66,6 @@ function extractCSV(data) {
   }).join(","));
   return [header, ...rows].join("\n");
 }
-// -----------------------------------
 
 // Bot message with translate button, animation, and download options
 function addBotMessage(text, graphBase64, graphSvg, vizData) {
