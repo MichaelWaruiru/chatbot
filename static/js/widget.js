@@ -1,85 +1,104 @@
+// Service worker register
+if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+        navigator.serviceWorker.register("/static/js/service_worker.js");
+    });
+}
 
 (function () {
-    // 1. Hardcode your backend URL.
+    // 1. Configuration
     const API_BASE = "https://ai.co-opmagic.org";
-    // 2. Inject Modern Scoped CSS
+    const WELCOME_MSG = "👋 Hello! I'm Co-op Magic AI Assistant. Ask me anything about cooperatives in South Sudan. I can translate both English and Arabic.";
+
+    // 2. Inject CSS
     const styles = `
       #coop-magic-widget { 
-          position: fixed; bottom: 20px; right: 20px; z-index: 9999; 
+          position: fixed; bottom: 20px; right: 20px; z-index: 9999; margin: 0; padding: 0;
           font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; 
+          display: flex; flex-direction: column; align-items: flex-end;
       }
+      
+      /* CTA Bubble */
+      #coop-magic-cta {
+          display: none; 
+          background: #ffffff; color: #333; padding: 10px 18px;
+          border-radius: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.15);
+          margin-bottom: 12px; font-size: 14px; font-weight: 600;
+          position: relative; border: 1px solid #00a859;
+          animation: coop-pop-in 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+          white-space: nowrap; cursor: pointer;
+      }
+      #coop-magic-cta::after {
+          content: ''; position: absolute; bottom: -8px; right: 20px;
+          border-left: 8px solid transparent; border-right: 8px solid transparent;
+          border-top: 8px solid #00a859;
+      }
+
+      @keyframes coop-pop-in {
+          from { opacity: 0; transform: translateY(15px) scale(0.9); }
+          to { opacity: 1; transform: translateY(0) scale(1); }
+      }
+
       #coop-magic-toggle { 
           background: linear-gradient(135deg, #00a859, #008747); 
           color: white; border: none; border-radius: 50%; 
           width: 60px; height: 60px; cursor: pointer; 
           box-shadow: 0 4px 12px rgba(0, 168, 89, 0.3); 
           font-size: 28px; display: flex; align-items: center; justify-content: center;
-          transition: transform 0.2s ease, box-shadow 0.2s ease;
+          transition: transform 0.2s ease;
       }
-      #coop-magic-toggle:hover {
-          transform: scale(1.05);
-          box-shadow: 0 6px 16px rgba(0, 168, 89, 0.4);
-      }
+      #coop-magic-toggle:hover { transform: scale(1.05); }
+
       #coop-magic-chat-container { 
           display: none; width: 360px; height: 550px; 
-          background: #ffffff; border-radius: 16px; 
-          box-shadow: 0 8px 24px rgba(0,0,0,0.12), 0 2px 8px rgba(0,0,0,0.04); 
-          flex-direction: column; overflow: hidden; margin-bottom: 15px; 
+          max-height: calc(100vh - 100px);
+          background: hsl(0, 0%, 100%); border-radius: 16px; 
+          box-shadow: 0 8px 24px rgba(0,0,0,0.2); 
+          flex-direction: column; overflow: hidden; 
+          position: absolute; bottom: 75px; right: 0;
           border: 1px solid #eaeaea; 
       }
+
       #coop-magic-header { 
-          background: linear-gradient(135deg, #00a859, #008747); 
-          color: white; padding: 18px 15px; font-weight: 600; font-size: 16px;
-          text-align: center; position: relative; box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-          letter-spacing: 0.3px;
+          background: #1a2b3c; color: white; padding: 12px 15px; 
+          font-weight: 600; display: flex; justify-content: space-between; align-items: center;
       }
-      #coop-magic-clear { 
-          position: absolute; right: 15px; top: 15px; font-size: 12px; 
-          cursor: pointer; background: rgba(255,255,255,0.15); 
-          padding: 4px 10px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.3); 
-          color: white; transition: all 0.2s ease; font-weight: 500;
+
+      .header-controls { display: flex; gap: 8px; }
+
+      #coop-magic-clear, #coop-magic-close { 
+          font-size: 11px; cursor: pointer; background: rgba(255,255,255,0.15); 
+          padding: 4px 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.2); color: white;
       }
-      #coop-magic-clear:hover { background: rgba(255,255,255,0.3); }
+
       #coop-magic-messages { 
-          flex: 1; padding: 20px 15px; overflow-y: auto; display: flex; 
-          flex-direction: column; gap: 12px; background: #fafbfc; 
+          flex: 1; padding: 15px; overflow-y: auto; display: flex; 
+          flex-direction: column; gap: 10px; background: #f3f4f6; 
       }
-      .message { 
-          padding: 12px 16px; border-radius: 18px; max-width: 82%; 
-          font-size: 14px; line-height: 1.4; box-shadow: 0 1px 2px rgba(0,0,0,0.05);
-      }
-      .message.user { 
-          background: #00a859; color: white; align-self: flex-end; 
-          border-bottom-right-radius: 4px; /* Creates a modern chat bubble 'tail' */
-      }
-      .message.bot { 
-          background: #ffffff; color: #333; align-self: flex-start; 
-          border-bottom-left-radius: 4px; border: 1px solid #eee;
-      }
-      #coop-magic-form { 
-          display: flex; border-top: 1px solid #eaeaea; padding: 12px; background: white; 
-      }
-      #coop-magic-input { 
-          flex: 1; padding: 10px 14px; border: 1px solid #ddd; 
-          border-radius: 20px; outline: none; transition: border-color 0.2s; 
-          font-size: 14px; background: #f9f9f9;
-      }
-      #coop-magic-input:focus { border-color: #00a859; background: white; }
+      
+      .message { padding: 10px 14px; border-radius: 15px; max-width: 85%; font-size: 14px; line-height: 1.4; word-wrap: break-word; }
+      .message.user { background: #2563eb; color: white; align-self: flex-end; border-bottom-right-radius: 4px; }
+      .message.bot { background: hsl(220, 13%, 91%); color: #333; align-self: flex-start; border-bottom-left-radius: 4px; border: 1px solid #eee; }
+      
+      .message.typing { font-style: italic; color: #888; background: transparent; border: none; }
+
+      #coop-magic-form { display: flex; border-top: 1px solid #eaeaea; padding: 12px; background: white; gap: 8px; }
+      #coop-magic-input { flex: 1; padding: 10px 15px; border: 1px solid #ddd; border-radius: 20px; outline: none; font-size: 14px; }
+
       #coop-magic-form button { 
-          margin-left: 8px; padding: 10px 18px; background: #00a859; 
-          color: white; border: none; border-radius: 20px; cursor: pointer; 
-          font-weight: 600; transition: background 0.2s ease;
+          padding: 8px 15px; background: #00a859; color: white; 
+          border: none; border-radius: 20px; cursor: pointer; font-weight: 600; 
       }
-      #coop-magic-form button:hover { background: #008747; }
-      .translate-btn { 
-          margin-top: 8px; font-size: 11px; cursor: pointer; 
-          background: #f0f0f0; border: 1px solid #ddd; padding: 4px 10px; 
-          border-radius: 12px; color: #555; transition: all 0.2s ease;
+
+      .translate-btn { margin-top: 8px; font-size: 11px; cursor: pointer; background: #00a859; color: white; border: none; padding: 4px 10px; border-radius: 10px; display: block; }
+      .chat-graph { max-width: 100%; border-radius: 8px; margin-top: 10px; box-shadow: 0 2px 6px rgba(0,0,0,0.05); }
+      .download-toolbar { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 8px; }
+
+      @media (max-width: 400px) {
+          #coop-magic-chat-container { width: calc(100vw - 40px); right: 0; }
       }
-      .translate-btn:hover { background: #e4e4e4; color: #333; }
     `;
     const styleSheet = document.createElement("style");
-    styleSheet.type = "text/css";
     styleSheet.innerText = styles;
     document.head.appendChild(styleSheet);
 
@@ -87,23 +106,29 @@
     const widgetContainer = document.createElement("div");
     widgetContainer.id = "coop-magic-widget";
     widgetContainer.innerHTML = `
+      <div id="coop-magic-cta">Chat with us!</div>
       <div id="coop-magic-chat-container">
         <header id="coop-magic-header">
-            Co-op Magic AI
-            <button id="coop-magic-clear" title="Clear Chat History">Clear</button>
+            <span>Co-op Magic AI</span>
+            <div class="header-controls">
+                <button id="coop-magic-clear">Clear</button>
+                <button id="coop-magic-close">✕</button>
+            </div>
         </header>
         <div id="coop-magic-messages"></div>
         <form id="coop-magic-form">
           <input type="text" id="coop-magic-input" placeholder="Ask a question..." autocomplete="off" required />
-          <button type="submit">Send</button>
+          <button type="submit" id="coop-magic-send-btn">Send</button>
         </form>
       </div>
       <button id="coop-magic-toggle">💬</button>
     `;
     document.body.appendChild(widgetContainer);
 
-    // 4. Widget Logic & DOM Elements
+    // 4. DOM Elements
     const toggleBtn = document.getElementById("coop-magic-toggle");
+    const closeBtn = document.getElementById("coop-magic-close");
+    const ctaBubble = document.getElementById("coop-magic-cta");
     const chatContainer = document.getElementById("coop-magic-chat-container");
     const form = document.getElementById("coop-magic-form");
     const input = document.getElementById("coop-magic-input");
@@ -111,37 +136,39 @@
     const clearBtn = document.getElementById("coop-magic-clear");
 
     let isChatOpen = false;
-
-    // --- STATE MANAGEMENT ---
     let chatHistory = JSON.parse(localStorage.getItem("coop_magic_history")) || [];
 
+    // --- HELPERS ---
     function saveHistory() {
         localStorage.setItem("coop_magic_history", JSON.stringify(chatHistory));
     }
 
-    toggleBtn.addEventListener("click", () => {
-        isChatOpen = !isChatOpen;
-        chatContainer.style.display = isChatOpen ? "flex" : "none";
-        if (isChatOpen) messages.scrollTop = messages.scrollHeight;
-    });
+    function downloadFile(url, filename) {
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+    }
 
-    clearBtn.addEventListener("click", () => {
-        if (confirm("Are you sure you want to clear the chat history?")) {
-            localStorage.removeItem("coop_magic_history");
-            chatHistory = [];
-            messages.innerHTML = "";
-            addBotMessage({ answer: "👋 Hello! I'm Co-op Magic AI Assistant. Ask me anything about cooperatives in South Sudan." }, false);
-        }
-    });
+    function extractCSV(data) {
+        if (!data || !data.length) return "";
+        const keys = Object.keys(data[0]);
+        const header = keys.join(",");
+        const rows = data.map(obj => keys.map(key => {
+            let val = obj[key] === null ? "" : String(obj[key]);
+            return `"${val.replace(/"/g, '""')}"`;
+        }).join(","));
+        return [header, ...rows].join("\n");
+    }
 
-    // 5. Rendering Functions
     function addMessage(text, type, saveToHistory = true) {
         const div = document.createElement("div");
         div.className = `message ${type}`;
         div.textContent = text;
         messages.appendChild(div);
         messages.scrollTop = messages.scrollHeight;
-
         if (saveToHistory) {
             chatHistory.push({ role: "user", text: text });
             saveHistory();
@@ -149,137 +176,135 @@
     }
 
     function addBotMessage(data, saveToHistory = true) {
-        if (data.answer) {
-            const wrapper = document.createElement("div");
-            wrapper.className = "message bot";
+        const wrapper = document.createElement("div");
+        wrapper.className = "message bot";
+        const content = document.createElement("div");
+        const textSpan = document.createElement("span");
+        textSpan.textContent = data.answer || "";
+        content.appendChild(textSpan);
 
-            const content = document.createElement("span");
-            content.textContent = data.answer;
-            wrapper.appendChild(content);
-
-            const isArabic = /[\u0600-\u06FF]/.test(data.answer);
-            let currentLang = isArabic ? "ar" : "en";
-
-            // Cache original text
-            const originalText = data.answer;
-            const translations = {
-                "en": data.answer,
-                "ar": null
-            };
-
-            const btn = document.createElement("button");
-            btn.className = "translate-btn";
-            btn.textContent = isArabic ? "Translate to English" : "Translate to Arabic";
-
-            btn.onclick = async () => {
-                btn.disabled = true;
-                const targetLang = currentLang === "en" ? "ar" : "en";
-                btn.textContent = "Translating...";
-                try {
-                    if (translations[targetLang]) {
-                        content.textContent = translations[targetLang];
-                    } else {
-                        const res = await fetch(`${API_BASE}/translate`, {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({
-                                text: originalText,  // Always from original
-                                target_lang: targetLang === "en" ? "English" : "Arabic"
-                            })
-                        });
-                        const resData = await res.json();
-                        translations[targetLang] = resData.translation;
-                        content.textContent = resData.translation;
-                    }
-                    currentLang = targetLang;
-                    btn.textContent = currentLang === "en" ? "Translate to Arabic" : "Translate to English";
-                } catch (err) {
-                    console.error(err);
-                    btn.textContent = "Error";
-                } finally {
-                    btn.disabled = false;
-                }
-            };
-
-            wrapper.appendChild(document.createElement("br"));
-            wrapper.appendChild(btn);
-            messages.appendChild(wrapper);
-        }
+        // ToolBar for buttons
+        const toolBar = document.createElement("div");
+        toolBar.className = "download-toolbar";
 
         if (data.graphBase64) {
             const img = document.createElement("img");
             img.src = `data:image/png;base64,${data.graphBase64}`;
-            img.style.maxWidth = "100%";
-            img.style.borderRadius = "8px";
-            img.style.marginTop = "10px";
-            img.style.border = "1px solid #ccc";
-
-            const wrapper = document.createElement("div");
-            wrapper.className = "message bot";
-            wrapper.appendChild(img);
-            messages.appendChild(wrapper);
+            img.className = "chat-graph";
+            content.appendChild(img);
+            
+            const bPng = document.createElement("button");
+            bPng.textContent = "📥 PNG"; bPng.className = "translate-btn";
+            bPng.onclick = () => downloadFile(`data:image/png;base64,${data.graphBase64}`, `chart_${Date.now()}.png`);
+            toolBar.appendChild(bPng);
         }
 
-        if (data.graphSvg) {
-            const svgContainer = document.createElement("div");
-            svgContainer.innerHTML = data.graphSvg;
-            svgContainer.style.maxWidth = "100%";
-            svgContainer.style.marginTop = "10px";
-
-            const svgElement = svgContainer.querySelector("svg");
-            if (svgElement) {
-                svgElement.style.width = "100%";
-                svgElement.style.height = "auto";
-            }
-
-            const wrapper = document.createElement("div");
-            wrapper.className = "message bot";
-            wrapper.appendChild(svgContainer);
-            messages.appendChild(wrapper);
+        if (data.vizData && data.vizData.length > 0) {
+            const bCsv = document.createElement("button");
+            bCsv.textContent = "📥 CSV"; bCsv.className = "translate-btn";
+            const csvBlob = new Blob([extractCSV(data.vizData)], { type: "text/csv" });
+            bCsv.onclick = () => downloadFile(URL.createObjectURL(csvBlob), `data_${Date.now()}.csv`);
+            toolBar.appendChild(bCsv);
         }
 
+        // Only add toolbar to content if it has buttons
+        if (toolBar.hasChildNodes()) {
+            content.appendChild(toolBar);
+        }
+
+        if (data.answer) {
+            const isArabic = /[\u0600-\u06FF]/.test(data.answer);
+            const tBtn = document.createElement("button");
+            tBtn.className = "translate-btn";
+            tBtn.textContent = isArabic ? "Translate to English" : "Translate to Arabic";
+            tBtn.onclick = async () => {
+                tBtn.disabled = true;
+                const target = isArabic ? "English" : "Arabic";
+                try {
+                    const res = await fetch(`${API_BASE}/translate`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ text: data.answer, target_lang: target })
+                    });
+                    const resData = await res.json();
+                    textSpan.textContent = resData.translation;
+                    tBtn.style.display = "none";
+                } catch (e) { tBtn.textContent = "Error"; tBtn.disabled = false; }
+            };
+            wrapper.appendChild(content);
+            wrapper.appendChild(tBtn);
+        } else {
+            wrapper.appendChild(content);
+        }
+
+        messages.appendChild(wrapper);
         messages.scrollTop = messages.scrollHeight;
+        if (saveToHistory) { chatHistory.push({ role: "bot", data: data }); saveHistory(); }
+    }
 
-        if (saveToHistory) {
-            chatHistory.push({ role: "bot", data: data });
-            saveHistory();
+    function addBotTyping() {
+        const div = document.createElement("div");
+        div.className = "message bot typing";
+        div.textContent = "Co-op Magic AI is typing...";
+        messages.appendChild(div);
+        messages.scrollTop = messages.scrollHeight;
+        return div;
+    }
+
+    function toggleChat() {
+        isChatOpen = !isChatOpen;
+        chatContainer.style.display = isChatOpen ? "flex" : "none";
+        ctaBubble.style.display = isChatOpen ? "none" : "block";
+        if (isChatOpen) input.focus();
+    }
+
+    toggleBtn.addEventListener("click", toggleChat);
+    closeBtn.addEventListener("click", toggleChat);
+    ctaBubble.addEventListener("click", toggleChat);
+
+    clearBtn.addEventListener("click", () => {
+        if (confirm("Clear chat history?")) {
+            localStorage.removeItem("coop_magic_history");
+            chatHistory = [];
+            messages.innerHTML = "";
+            addBotMessage({ answer: WELCOME_MSG }, false);
         }
-    }
-
-    if (chatHistory.length > 0) {
-        chatHistory.forEach(msg => {
-            if (msg.role === "user") {
-                addMessage(msg.text, "user", false);
-            } else if (msg.role === "bot") {
-                addBotMessage(msg.data, false);
-            }
-        });
-    } else {
-        addBotMessage({ answer: "👋 Hello! I'm Co-op Magic AI Assistant. Ask me anything about cooperatives in South Sudan. I can translate both English and Arabic." }, false);
-    }
+    });
 
     form.addEventListener("submit", async (e) => {
         e.preventDefault();
-        const message = input.value.trim();
-        if (!message) return;
+        const msg = input.value.trim();
+        if (!msg) return;
 
-        addMessage(message, "user");
+        addMessage(msg, "user");
         input.value = "";
         input.disabled = true;
+        const typing = addBotTyping();
 
         try {
             const res = await fetch(`${API_BASE}/chat`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ message })
+                body: JSON.stringify({ message: msg })
             });
             const data = await res.json();
+            typing.remove();
             addBotMessage(data);
         } catch (err) {
-            addBotMessage({ answer: "Sorry, something went wrong connecting to the server." });
+            typing.remove();
+            addBotMessage({ answer: "Connection error." });
         } finally {
             input.disabled = false;
             input.focus();
         }
     });
+
+    setTimeout(() => { if (!isChatOpen) ctaBubble.style.display = "block"; }, 1500);
+    addBotMessage({ answer: WELCOME_MSG }, false);
+    if (chatHistory.length > 0) {
+        chatHistory.forEach(m => {
+            if (m.role === "user") addMessage(m.text, "user", false);
+            else addBotMessage(m.data, false);
+        });
+    }
 })();
