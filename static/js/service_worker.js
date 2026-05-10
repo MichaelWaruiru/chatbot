@@ -2,7 +2,8 @@ const CACHE_NAME = "coop-magic-cache-v1";
 const STATIC_ASSETS = [
     "/",
     "/static/css/style.css",
-    "/static/js/chat.js"
+    "/static/js/chat.js",
+    "static/js/widgets.js"
 ];
 
 // Install -> Cache static files
