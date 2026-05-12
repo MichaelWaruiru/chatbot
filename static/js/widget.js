@@ -672,7 +672,7 @@ if ("serviceWorker" in navigator) {
 
                         if (!res.ok) {
                             throw new Error(
-                                "Translation API failed"
+                                "Translation failed"
                             );
                         }
 
