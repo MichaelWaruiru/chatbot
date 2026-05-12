@@ -655,6 +655,7 @@ if ("serviceWorker" in navigator) {
                             `${API_BASE}/translate`,
                             {
                                 method: "POST",
+                                credentials: "include",
                                 headers: {
                                     "Content-Type":
                                         "application/json",
@@ -800,6 +801,7 @@ if ("serviceWorker" in navigator) {
                 `${API_BASE}/chat`,
                 {
                     method: "POST",
+                    credentials: "include",
                     headers: {
                         "Content-Type":
                             "application/json",
@@ -812,7 +814,7 @@ if ("serviceWorker" in navigator) {
 
             if (!res.ok) {
                 throw new Error(
-                    "Server error"
+                    "Something went wrong on the server. Please try again later."
                 );
             }
 

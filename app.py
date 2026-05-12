@@ -36,7 +36,7 @@ except FileNotFoundError:
     logger.warning("chitchat.json not found. Skipping chitchat interception.")
 
 app = Flask(__name__)
-CORS(app, resources={r"/chat": {"origins": "*"}, r"/translate": {"origins": "*"}})
+CORS(app, resources={r"/chat": {"origins": "*"}, r"/translate": {"origins": "*"}}, supports_credentials=True)
 # Redis configuration
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY")
 app.config["SESSION_TYPE"] = os.getenv("SESSION_TYPE")
