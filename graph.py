@@ -132,7 +132,12 @@ def extract_tables_and_aliases(sql_text: str):
 
 def sanitize_sql(sql: str) -> str:
     sql = re.sub(r"```sql|```", "", sql, flags=re.IGNORECASE)
-    return sql.strip().rstrip(";")
+    sql = sql.strip().rstrip(";")
+    
+    # Escape date_format placeholders
+    sql = re.sub(r'(?<!%)%(?!%)', '%%', sql)
+    
+    return sql
 
 def validate_sql(sql: str) -> None:
     sql_lower = sql.lower()
@@ -581,7 +586,7 @@ def visualize_node(state: State):
     return {"graph_base64": img_base64, "graph_svg": svg_string}
 
 def route_to_answer(state: State):
-    if state["intent"] == "visualize" or state["intent"] == "viz_data":
+    if state["intent"] == "visualize":
         return "visualize"
     return "answer"
 
