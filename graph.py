@@ -360,7 +360,7 @@ def extract_llm_text(resp) -> str:
 
     return str(content).strip()
 
-def generate_valid_sql(question: str, llm, max_retries: int = 3) -> str:
+def generate_valid_sql(question: str, max_retries: int = 3) -> str:
     def autocorrect_state_aliases(sql_text: str) -> str:
         _, alias_map = extract_tables_and_aliases(
             sql_text.lower()
