@@ -6,6 +6,7 @@ import logging
 import json
 import re
 import time
+import asyncio
 from google.genai.errors import ServerError
 from graph import build_graph
 from llm import gemini_flash_fast  # Import the fast model for the translation route
@@ -133,10 +134,10 @@ def chat():
     try:
         for attempt in range(3):
             try:
-                result = graph.invoke(
+                result = asyncio.run(graph.ainvoke(
                     {"question": question},
                     config=config
-                )
+                ))
                 break
             except ServerError as e:
                 logger.warning(f"[503 ERROR] attempt {attempt+1}")

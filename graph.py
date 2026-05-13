@@ -3,6 +3,7 @@ import os
 import logging
 import hashlib
 import base64
+import asyncio
 import matplotlib
 matplotlib.use("agg")  # This for headless plot graphs(Use before pyplot import)
 import matplotlib.pyplot as plt
@@ -56,6 +57,7 @@ class State(TypedDict):
     viz_data: Optional[list]
     graph_base64: Optional[str]
     graph_svg: Optional[str]
+    download_svg: Optional[bool]
 
 # Intent mapping
 INTENT_MAP = {
@@ -304,13 +306,14 @@ def log_index_usage(sql: str):
     except Exception as e:
         logger.warning(f"Failed to log index usage: {e}")
 
-def semantic_search(question: str, k: int = 3):
+async def semantic_search_async(question: str, k: int = 3):
     if question in vector_cache:
         logger.info(f"[VECTOR CACHE HIT] {question}")
         return vector_cache[question]
 
     try:
-        docs = vector_db.similarity_search(question, k=k)
+        # Running search in thread since FAISS/Chroma search is usually sync
+        docs = await asyncio.to_thread(vector_db.similarity_search, question, k=k)
         results = [doc.page_content for doc in docs]
         vector_cache[question] = results
         logger.info(f"[VECTOR SEARCH] Query executed | Docs retrieved: {len(results)}")
@@ -320,26 +323,22 @@ def semantic_search(question: str, k: int = 3):
         logger.error(f"[VECTOR ERROR] {e}")
         return []
 
-def run_query(query: str):
+async def run_query_async(query: str):
     sql = sanitize_sql(query)
     normalized_sql = " ".join(sql.lower().split())
 
     cache_key = (f"sql_cache:{hashlib.md5(normalized_sql.encode()).hexdigest()}")
-    cached_result = redis_client.get(cache_key)
+    cached_result = await asyncio.to_thread(redis_client.get, cache_key)
 
     if cached_result:
         logger.info("[SQL REDIS CACHE HIT]")
-        return cached_result
+        return cached_result.decode("utf-8") if isinstance(cached_result, bytes) else cached_result
 
     logger.info(f"[SQL EXECUTE] {sql}")
     try:
-        result = db.run(sql)
-        # Store in Redis for 10 minutes (600 seconds)
-        redis_client.setex(
-            cache_key,
-            600,
-            str(result)
-        )
+        result = await asyncio.to_thread(db.run, sql)
+        # Store in Redis for 5 minutes (300 seconds)
+        await asyncio.to_thread(redis_client.setex, cache_key, 300, str(result))
 
         logger.info("[SQL SUCCESS]")
         return result
@@ -348,19 +347,18 @@ def run_query(query: str):
         raise
 
 def extract_llm_text(resp) -> str:
-    content = resp.content
+    # Use native property if available, otherwise fallback
+    content = getattr(resp, 'content', resp)
 
     if isinstance(content, list):
         first = content[0]
-
         if isinstance(first, dict):
             return first.get("text", "").strip()
-
         return str(first).strip()
 
     return str(content).strip()
 
-def generate_valid_sql(question: str, max_retries: int = 3) -> str:
+async def generate_valid_sql(question: str, max_retries: int = 3) -> str:
     def autocorrect_state_aliases(sql_text: str) -> str:
         _, alias_map = extract_tables_and_aliases(
             sql_text.lower()
@@ -387,19 +385,18 @@ def generate_valid_sql(question: str, max_retries: int = 3) -> str:
     error_message = None
 
     for attempt in range(max_retries):
-        sql_raw = SQL_CHAIN.invoke(
-            {
-                "question": question
-                if not error_message
-                else SQL_RETRY_PROMPT.format(
-                    error_message=error_message,
-                    question=question
-                )
-            }
-        )
-
+        # Using ainvoke for native async speed
+        input_data = {
+            "question": question
+            if not error_message
+            else SQL_RETRY_PROMPT.format(
+                error_message=error_message,
+                question=question
+            )
+        }
+        
+        sql_raw = await SQL_CHAIN.ainvoke(input_data)
         sql = sanitize_sql(sql_raw)
-
         sql = autocorrect_state_aliases(sql)
 
         try:
@@ -421,9 +418,15 @@ def generate_valid_sql(question: str, max_retries: int = 3) -> str:
                 )
 
 # Natural answer generation
-def answer_user_query(question: str, sql: Optional[str] = None) -> str:
+async def answer_user_query(question: str, sql: Optional[str] = None) -> str:
     try:
-        context_docs = semantic_search(question)
+        # Parallelize Semantic Search and SQL Gen (if SQL not provided)
+        if not sql:
+            search_task = asyncio.create_task(semantic_search_async(question))
+            sql_task = asyncio.create_task(generate_valid_sql(question))
+            context_docs, sql = await asyncio.gather(search_task, sql_task)
+        else:
+            context_docs = await semantic_search_async(question)
 
         context = (
             "\n".join(context_docs[:3])
@@ -431,12 +434,9 @@ def answer_user_query(question: str, sql: Optional[str] = None) -> str:
             else ""
         )
 
-        if not sql:
-            sql = generate_valid_sql(question, llm_pro)
-
         logger.info(f"[FINAL SQL USED] {sql}")
 
-        response = run_query(sql)
+        response = await run_query_async(sql)
 
     except Exception as e:
         logger.error(
@@ -468,7 +468,7 @@ def answer_user_query(question: str, sql: Optional[str] = None) -> str:
             ]
         )
 
-        resp = llm_flash.invoke(
+        resp = await llm_flash.ainvoke(
             prompt.format_messages()
         )
 
@@ -489,7 +489,7 @@ def answer_user_query(question: str, sql: Optional[str] = None) -> str:
         ]
     )
 
-    resp = llm_flash.invoke(
+    resp = await llm_flash.ainvoke(
         prompt.format_messages()
     )
 
@@ -505,10 +505,11 @@ def answer_user_query(question: str, sql: Optional[str] = None) -> str:
     return answer
 
 # Language detection and translation
-def detect_lan_and_translate(state: State, llm):
+async def detect_lan_and_translate(state: State, llm):
     text = state["question"]
 
-    lang = detect_language(text)
+    # Assuming detect_language and translate_text are fast or can be threaded
+    lang = await asyncio.to_thread(detect_language, text)
 
     if lang == "en":
         return {
@@ -516,7 +517,8 @@ def detect_lan_and_translate(state: State, llm):
             "language": "en"
         }
 
-    translated, _ = translate_text(
+    translated, _ = await asyncio.to_thread(
+        translate_text,
         text,
         llm,
         target_lang="English"
@@ -528,7 +530,7 @@ def detect_lan_and_translate(state: State, llm):
     }
 
 # Intent detection
-def detect_intent(state: State, llm):
+async def detect_intent(state: State, llm):
     question = state["question"].lower()
 
     viz_aliases = INTENT_MAP.get("visualize", [])
@@ -551,7 +553,7 @@ def detect_intent(state: State, llm):
         question=state["question"]
     )
 
-    response = llm.invoke(
+    response = await llm.ainvoke(
         [HumanMessage(content=prompt_text)]
     )
 
@@ -567,7 +569,7 @@ def detect_intent(state: State, llm):
     return {"intent": "unknown"}
 
 # Data selection
-def select_data(state: State):
+async def select_data(state: State):
     question = state["question"].lower()
 
     if (
@@ -595,18 +597,16 @@ def select_data(state: State):
         }
 
     try:
-        sql = generate_valid_sql(
-            state["question"],
-            llm_pro
+        # Parallelize SQL gen and Answer Gen (Answer gen will trigger nested SQL gen if needed)
+        sql = await generate_valid_sql(
+            state["question"]
         )
 
         if intent == "visualize":
-            df = run_query_df(sql)
-
-            answer = answer_user_query(
-                state["question"],
-                sql
-            )
+            df_task = asyncio.to_thread(run_query_df, sql)
+            answer_task = answer_user_query(state["question"], sql)
+            
+            df, answer = await asyncio.gather(df_task, answer_task)
 
             df_json = df.to_dict(
                 orient="records"
@@ -618,12 +618,11 @@ def select_data(state: State):
                 "answer": answer
             }
 
+        answer = await answer_user_query(state["question"], sql)
+
         return {
             "sql": sql,
-            "answer": answer_user_query(
-                state["question"],
-                sql
-            ),
+            "answer": answer,
             "viz_data": None,
             "graph_base64": None,
             "graph_svg": None
@@ -642,7 +641,7 @@ def select_data(state: State):
         }
 
 # UPDATED: generate_answer now routes viz_data and graph_svg to the output
-def generate_answer(state: State):
+async def generate_answer(state: State):
     result = {
         "answer": state.get("answer")
         or "No data found."
@@ -692,136 +691,199 @@ def detect_chart_type(question: str) -> str:
 
     return max(scores, key=scores.get)
 
-# UPDATED: Completely rewritten for Thread Safety, IndexError prevention, and SVG output
-def visualize_node(state: State):
-    df_json = state.get("viz_data")
-    if not df_json:
-        return {
-            "graph_base64": None,
-            "graph_svg": None
-        }
+# Async + Thread Safe + SVG support
+async def visualize_node(state: State):
+    def generate_chart():
+        df_json = state.get("viz_data")
 
-    df = pd.DataFrame(df_json)
+        if not df_json:
+            return {"graph_base64": None, "graph_svg": None}
 
-    if (
-        not isinstance(df, pd.DataFrame)
-        or df.empty
-        or len(df.columns) < 2
-    ):
-        logger.warning(
-            "Dataframe is empty or lacks sufficient columns for visualization"
-        )
+        df = pd.DataFrame(df_json)
 
-        return {
-            "graph_base64": None,
-            "graph_svg": None
-        }
+        if not isinstance(df, pd.DataFrame) or df.empty or len(df.columns) < 2:
+            logger.warning("Dataframe is empty or lacks sufficient columns for visualization")
+            return {"graph_base64": None, "graph_svg": None}
 
-    numeric_cols = df.select_dtypes(
-        include="number"
-    ).columns.tolist()
+        numeric_cols = df.select_dtypes(include="number").columns.tolist()
 
-    if not numeric_cols:
-        logger.warning(
-            "No numeric columns available for plotting"
-        )
+        if not numeric_cols:
+            logger.warning("No numeric columns available for plotting")
+            return {"graph_base64": None, "graph_svg": None}
 
-        return {
-            "graph_base64": None,
-            "graph_svg": None
-        }
+        y_col = numeric_cols[0]
 
-    y_col = numeric_cols[0]
+        # Normalize gender values
+        gender_col = df.columns[0]
 
-    chart_type = detect_chart_type(
-        state.get("question", "")
-    )
+        if gender_col.lower().strip() in ["member_gender", "director_gender"]:
 
-    fig, ax = plt.subplots(figsize=(10, 6))
+            def normalize_gender(val):
+                val = str(val).strip().lower() if val else "unknown"
+                if val in ["m", "male"]: return "Male"
+                if val in ["f", "female"]: return "Female"
+                if val in ["unknown", ""]: return "Other"
+                return val.capitalize()
 
-    if chart_type == "histogram":
-        values = df[y_col]
+            df[gender_col] = df[gender_col].apply(normalize_gender)
+            df = df.groupby(gender_col)[y_col].sum().reset_index()
 
-        ax.hist(
-            values,
-            bins=10,
-            color="steelblue",
-            edgecolor="black",
-            alpha=0.7
-        )
+        chart_type = detect_chart_type(state.get("question", ""))
 
-        ax.set_xlabel(
-            y_col,
-            fontsize=13,
-            fontweight="bold"
-        )
+        fig, ax = plt.subplots(figsize=(10, 6))
 
-        ax.set_ylabel(
-            "Frequency",
-            fontsize=13,
-            fontweight="bold"
-        )
+        # Pivot grouped data
+        if len(df.columns) >= 3:
+            try:
+                df = df.pivot(
+                    index=df.columns[0],
+                    columns=df.columns[1],
+                    values=y_col
+                )
+            except Exception as e:
+                logger.warning(f"Pivot failed: {e}")
 
-        ax.set_title(
-            "Distribution Histogram",
-            fontsize=16,
-            fontweight="bold",
-            pad=20
-        )
+        # PIE CHART
+        if chart_type == "pie":
+            colors = ['#FF6B6B', '#4ECDC4', "#BCD145", '#FFA07A', '#98D8C8', '#F7DC6F']
 
-    else:
-        if y_col in df.columns:
-            df.plot(
-                kind="bar",
-                x=df.columns[0],
-                y=y_col,
-                legend=False,
-                color="steelblue",
-                ax=ax
+            if y_col in df.columns:
+                values = df[y_col]
+                labels = df[df.columns[0]]
+            else:
+                values = df.iloc[:, 0]
+                labels = df.index
+
+            _, _, autotexts = ax.pie(
+                values,
+                labels=labels,
+                autopct='%1.1f%%',
+                colors=colors,
+                startangle=90,
+                textprops={'fontsize': 13, 'weight': 'bold'}
             )
 
-    fig.tight_layout()
+            ax.set_title(f'{y_col} Distribution', fontsize=16, fontweight='bold', pad=20)
 
-    # Generate PNG only
-    buf_png = BytesIO()
+            for autotext in autotexts:
+                autotext.set_color('white')
 
-    fig.savefig(
-        buf_png,
-        format="png",
-        dpi=100
-    )
+        # LINE CHART
+        elif chart_type == "line":
 
-    buf_png.seek(0)
+            if y_col in df.columns:
+                x_vals = df[df.columns[0]]
+                values = df[y_col]
+            else:
+                x_vals = df.index
+                values = df.iloc[:, 0]
 
-    img_base64 = base64.b64encode(
-        buf_png.read()
-    ).decode("utf-8")
+            ax.plot(
+                x_vals,
+                values,
+                marker='o',
+                linewidth=2,
+                markersize=8,
+                color='steelblue'
+            )
 
-    # Generate SVG only when needed
-    svg_string = None
+            ax.set_xlabel(df.columns[0], fontsize=13, fontweight='bold')
+            ax.set_ylabel(y_col, fontsize=13, fontweight='bold')
+            ax.set_title('Data Trend', fontsize=16, fontweight='bold')
+            ax.tick_params(axis='x', rotation=45, labelsize=12)
+            ax.grid(True, alpha=0.3)
 
-    if state.get("download_svg"):
-        buf_svg = BytesIO()
+        # HISTOGRAM
+        elif chart_type == "histogram":
 
-        fig.savefig(
-            buf_svg,
-            format="svg",
-            bbox_inches="tight"
-        )
+            values = df[y_col]
 
-        buf_svg.seek(0)
+            ax.hist(
+                values,
+                bins=10,
+                color='steelblue',
+                edgecolor='black',
+                alpha=0.7
+            )
 
-        svg_string = (
-            buf_svg.read()
-            .decode("utf-8")
-        )
+            ax.set_xlabel(y_col, fontsize=13, fontweight='bold')
+            ax.set_ylabel('Frequency', fontsize=13, fontweight='bold')
+            ax.set_title('Distribution Histogram', fontsize=16, fontweight='bold', pad=20)
 
-    plt.close(fig)
+        # BAR CHART
+        else:
 
-    return {
-        "graph_base64": img_base64,
-        "graph_svg": svg_string
-    }
+            if y_col in df.columns:
+                df.plot(
+                    kind='bar',
+                    x=df.columns[0],
+                    y=y_col,
+                    legend=False,
+                    color='steelblue',
+                    ax=ax
+                )
+                values = df[y_col]
+
+            else:
+                df.plot(
+                    kind='bar',
+                    legend=False,
+                    color='steelblue',
+                    ax=ax
+                )
+                values = df.iloc[:, 0]
+
+            ax.set_xlabel(df.columns[0], fontsize=13, fontweight='bold')
+            ax.set_ylabel(y_col, fontsize=13, fontweight='bold')
+            ax.set_title('Data Distribution', fontsize=16, fontweight='bold')
+            ax.tick_params(axis='x', rotation=45)
+
+            y_max = values.max() if not values.empty else 1
+
+            for i, v in enumerate(values):
+                ax.text(
+                    i,
+                    v + (y_max * 0.02),
+                    str(v),
+                    ha='center',
+                    va='bottom',
+                    fontweight='bold'
+                )
+
+        fig.tight_layout()
+
+        # PNG
+        buf_png = BytesIO()
+        fig.savefig(buf_png, format='png', dpi=100)
+        buf_png.seek(0)
+
+        img_base64 = base64.b64encode(
+            buf_png.read()
+        ).decode('utf-8')
+
+        # SVG
+        svg_string = None
+
+        if state.get("download_svg"):
+            buf_svg = BytesIO()
+
+            fig.savefig(
+                buf_svg,
+                format='svg',
+                bbox_inches='tight'
+            )
+
+            buf_svg.seek(0)
+            svg_string = buf_svg.read().decode('utf-8')
+
+        plt.close(fig)
+
+        return {
+            "graph_base64": img_base64,
+            "graph_svg": svg_string
+        }
+
+    return await asyncio.to_thread(generate_chart)
 
 def route_to_answer(state: State):
     if state["intent"] == "visualize":
@@ -831,8 +893,15 @@ def route_to_answer(state: State):
 def build_graph():
     graph = StateGraph(State)
 
-    graph.add_node("translate", lambda s: detect_lan_and_translate(s, llm_flash))
-    graph.add_node("intent", lambda s: detect_intent(s, llm_flash))
+    # All nodes are async
+    async def translate_node(state: State):
+        return await detect_lan_and_translate(state, llm_flash)
+    
+    async def intent_node(state: State):
+        return await detect_intent(state, llm_flash)
+    
+    graph.add_node("translate", translate_node)
+    graph.add_node("intent", intent_node)
 
     graph.add_node("data", select_data)
     graph.add_node("visualize", visualize_node)
