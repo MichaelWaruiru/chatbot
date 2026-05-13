@@ -312,7 +312,7 @@ async def semantic_search_async(question: str, k: int = 3):
         return vector_cache[question]
 
     try:
-        # Running search in thread since FAISS/Chroma search is usually sync
+        # Running search in thread since FAISS search is usually sync
         docs = await asyncio.to_thread(vector_db.similarity_search, question, k=k)
         results = [doc.page_content for doc in docs]
         vector_cache[question] = results
