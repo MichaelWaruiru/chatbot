@@ -162,13 +162,39 @@ def chat():
             response.get("vizData")
         ])
         
-        # store only valid responses
-        if response.get("answer") and not is_viz:
+        # Prevent caching failed/useless answers
+        answer_text = (
+            response.get("answer") or ""
+        ).lower().strip()
+
+        BAD_CACHE_PATTERNS = [
+            "i couldn't",
+            "couldn't process",
+            "couldn't find",
+            "no information",
+            "not enough information",
+            "not available",
+            "no data",
+            "unable to",
+            "try again",
+            "something went wrong",
+            "failed",
+            "error"
+        ]
+
+        should_cache = (answer_text and not is_viz and not any(pattern in answer_text for pattern in BAD_CACHE_PATTERNS)
+        )
+
+        if should_cache:
             store_cached_answer(question, response)
             store_que_pair(question, response)
-            logger.info("[CACHE STORE - TEXT ONLY, REDIS + FAISS]")
+
+            logger.info(
+                "[CACHE STORE - REDIS + FAISS]"
+            )
+
         else:
-            logger.info("[SKIP CACHE - VISUALIZATION]")
+            logger.info("[SKIP CACHE - FAILED OR VISUAL RESPONSE]")
 
         return jsonify(response)
     
