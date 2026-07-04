@@ -63,17 +63,18 @@ llm_flash = gemini_flash_fast()
 graph = build_graph()
 
 # Vector database to run in the background every 5 minutes for incremental updates
-scheduler = BackgroundScheduler()
+if not app.debug or os.getenv("WERKZEUG_RUN_MAIN") == "true": # Prevents the flask debug reloader from starting duplicate schedulers
+    scheduler = BackgroundScheduler()
 
-scheduler.add_job(
-    vector_db.update_vector_index,
-    "interval",
-    minutes=5,
-    max_instances=1
-)
+    scheduler.add_job(
+        vector_db.update_vector_index,
+        "interval",
+        minutes=5,
+        max_instances=1
+    )
 
-scheduler.start()
-logger.info("Vector index background updater started.")
+    scheduler.start()
+    logger.info("Vector index background updater started.")
 
 @app.route("/")
 def index():
@@ -241,7 +242,7 @@ def translate():
 if __name__ == "__main__":
     print("Loading vector database...")
 
-    vector_db.get_vector_db()
+    vector_db.build_vector_db()
 
     print("Vector DB ready.")
-    app.run(host="0.0.0.0", debug=True, port=5000, threaded=True)
+    app.run(host="0.0.0.0", debug=False, port=5000, threaded=True)

@@ -1,5 +1,6 @@
 import os
 import time
+import gc
 import pandas as pd
 from dotenv import load_dotenv
 import logging
@@ -305,21 +306,45 @@ def update_vector_index():
 
     # Step 4: Embed in batches to avoid rate limits
     total_batches = (len(splits) + BATCH_SIZE - 1) // BATCH_SIZE
+    
+    # Track if anything was added
+    merged_any = False
+    
     for i in range(0, len(splits), BATCH_SIZE):
         batch = splits[i:i + BATCH_SIZE]
         logger.info(f"Embedding batch {i // BATCH_SIZE + 1}/{total_batches}...")
+        
+        # Call the retry wrapper to embed the batch
         new_index = embed_batch_with_retry(batch, embeddings)
+        
+        if _vector_db_instance is None:
+            _vector_db_instance = new_index
+        else:
+            _vector_db_instance.merge_from(new_index)
+            
+        merged_any = True
 
-        _vector_db_instance.merge_from(new_index)
+        # _vector_db_instance.merge_from(new_index)
 
         if i + BATCH_SIZE < len(splits):
             logger.info(f"Sleeping for {BATCH_SLEEP}s to respect API rate limits...")
             time.sleep(BATCH_SLEEP)
 
-    # Step 5: Save updated index
-    _vector_db_instance.save_local(VECTOR_INDEX_PATH)
-    set_last_update_time(pd.Timestamp.now())
-    logger.info("Vector index successfully updated.")
+    # Step 5: Save and clean up memory immediately
+    if merged_any:
+        logger.info("Saving updated vector index to disk...")
+        _vector_db_instance.save_local(VECTOR_INDEX_PATH)
+        set_last_update_time(pd.Timestamp.now())
+        
+        # Wipe out memory to avoid memory bloat
+        # This prevents background thread from locking RAM
+        _vector_db_instance = None
+        
+        # Clear memory and force garbage collection
+        if "new_index" in locals():
+            del new_index
+        gc.collect()
+        logger.info("Vector index updated and background RAM cleared successfully.")
 
     return _vector_db_instance
 
