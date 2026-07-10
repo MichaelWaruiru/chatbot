@@ -9,7 +9,7 @@ print("Testing Remote MySQL Connection to co-opmagic...")
 try:
     db_uri = os.getenv("DB_URI")
     if not db_uri:
-        print("❌ Error: DB_URI is completely missing from your .env file!")
+        print("Error: DB_URI is completely missing from your .env file!")
         exit()
 
     # Attempt to connect
@@ -18,8 +18,8 @@ try:
     # Fetch the tables to prove the connection works and permissions are correct
     tables = db.get_usable_table_names()
     
-    print("✅ Success! Connected to the remote database.")
-    print(f"📊 Found tables: {tables}")
+    print("Success! Connected to the remote database.")
+    print(f"Found tables: {tables}")
 
 except Exception as e:
-    print(f"❌ Connection Failed: {e}")
+    print(f"Connection Failed: {e}")
