@@ -444,7 +444,7 @@ async def answer_user_query(question: str, sql: Optional[str] = None) -> str:
         )
 
         return (
-            "I couldn't find information related to that question. "
+            "I couldn't find information related to that question. \n" +
             "Try asking about cooperatives, members, directors, or locations."
         )
 
