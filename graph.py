@@ -418,23 +418,15 @@ async def generate_valid_sql(question: str, max_retries: int = 3) -> str:
                 )
 
 # Natural answer generation
-async def answer_user_query(question: str, sql: Optional[str] = None, sql_failed: bool = False) -> str:
+async def answer_user_query(question: str, sql: Optional[str] = None) -> str:
     try:
-        # If SQL generation failed previously, only do semantic search and return a fallback answer
-        if sql_failed:
-            context_docs = await semantic_search_async(question)
-            response = "" # No SQL result
         # Parallelize Semantic Search and SQL Gen (if SQL not provided)
-        elif not sql:
+        if not sql:
             search_task = asyncio.create_task(semantic_search_async(question))
             sql_task = asyncio.create_task(generate_valid_sql(question))
             context_docs, sql = await asyncio.gather(search_task, sql_task)
-            logger.info(f"[FINAL SQL USED] {sql}")
-            response = await run_query_async(sql)
         else:
             context_docs = await semantic_search_async(question)
-            logger.info(f"[FINAL SQL USED] {sql}")
-            response = await run_query_async(sql)
 
         context = (
             "\n".join(context_docs[:3])
@@ -455,16 +447,13 @@ async def answer_user_query(question: str, sql: Optional[str] = None, sql_failed
             "I couldn't find information related to that question. \n" +
             "Try asking about cooperatives, members, directors, or locations."
         )
-        
-    # If no data returned from database and no semantic vector context found
-    if (not response or response.strip() in ["", "0 rows in set"]) and not context.strip():
-        return (
-            "I couldn't find information related to that question. \n" +
-            "Try asking about cooperatives, members, directors, or locations."
-        )
 
-    # If we have context but no database results
-    if not response or response.strip() in ["", "0 rows in set"]:
+    if (
+        not response
+        or response.strip() == ""
+        or response.strip() == "0 rows in set"
+    ):
+
         prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", NO_RESULTS_SYSTEM_PROMPT),
@@ -485,7 +474,6 @@ async def answer_user_query(question: str, sql: Optional[str] = None, sql_failed
 
         return extract_llm_text(resp)
 
-    # Database + context query path
     prompt = ChatPromptTemplate.from_messages(
         [
             ("system", NATURAL_ANSWER_SYSTEM_PROMPT),
@@ -608,64 +596,49 @@ async def select_data(state: State):
             )
         }
 
-    # Safely isolate SQL generation
-    sql = None
-    sql_failed = False
     try:
         # Parallelize SQL gen and Answer Gen (Answer gen will trigger nested SQL gen if needed)
         sql = await generate_valid_sql(
             state["question"]
         )
-    except Exception as e:
-        logger.warning(f"SQL generation failed: {e}")
-        sql_failed = True
-        
-        try:
-            if intent == "visualize":
-                if sql_failed or not sql:
-                    return {
-                        "answer": "I couldn't find information related to that question.",
-                        "viz_data": None,
-                        "graph_base64": None,
-                        "graph_svg": None
-                    }
-                    
-                df_task = asyncio.to_thread(run_query_df, sql)
-                answer_task = answer_user_query(state["question"], sql)
-                
-                df, answer = await asyncio.gather(df_task, answer_task)
 
-                df_json = df.to_dict(
-                    orient="records"
-                )
+        if intent == "visualize":
+            df_task = asyncio.to_thread(run_query_df, sql)
+            answer_task = answer_user_query(state["question"], sql)
+            
+            df, answer = await asyncio.gather(df_task, answer_task)
 
-                return {
-                    "sql": sql,
-                    "viz_data": df_json,
-                    "answer": answer
-                }
-
-            answer = await answer_user_query(state["question"], sql=sql, sql_failed=sql_failed)
+            df_json = df.to_dict(
+                orient="records"
+            )
 
             return {
                 "sql": sql,
-                "answer": answer,
-                "viz_data": None,
-                "graph_base64": None,
-                "graph_svg": None
+                "viz_data": df_json,
+                "answer": answer
             }
 
-        except Exception as e:
-            logger.error(f"[SELECT DATA ERROR] {e}")
+        answer = await answer_user_query(state["question"], sql)
 
-            return {
-                "answer": (
-                    "I couldn't process your request at the moment."
-                ),
-                "viz_data": None,
-                "graph_base64": None,
-                "graph_svg": None
-            }
+        return {
+            "sql": sql,
+            "answer": answer,
+            "viz_data": None,
+            "graph_base64": None,
+            "graph_svg": None
+        }
+
+    except Exception as e:
+        logger.error(f"[SELECT DATA ERROR] {e}")
+
+        return {
+            "answer": (
+                "I couldn't process your request at the moment."
+            ),
+            "viz_data": None,
+            "graph_base64": None,
+            "graph_svg": None
+        }
 
 # UPDATED: generate_answer now routes viz_data and graph_svg to the output
 async def generate_answer(state: State):
