@@ -3,7 +3,7 @@ services:
     build: .
     container_name: chatbot
     command: >
-      gunicorn app:app  --bind 0.0.0.0:5000  --workers 2 --threads 20  --timeout 120  --graceful-timeout 120  --keep-alive 5  --max-requests 100  --max-requests-jitter 20 
+      gunicorn app:app --bind 0.0.0.0:5000 --workers 2 --threads 20 --timeout 120 --graceful-timeout 120 --keep-alive 5 --max-requests 100 --max-requests-jitter 20 
     ports:
       - "5000:5000"
     env_file:
@@ -16,12 +16,38 @@ services:
       - app-network
     restart: always
 
+    # Prevents disk fill-up from logs
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # Limit container memory to prevent host crash
+    deploy:
+      resources:
+        limits:
+          memory: 2.5G
+        reservations:
+          memory: 1.2G
+
   redis:
-    image: redis:7
+    image: redis:7-alpine
     container_name: redis
     restart: always
     networks:
       - app-network
+    # Prevents redis from using all RAM
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "2"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
 
 networks:
   app-network:
